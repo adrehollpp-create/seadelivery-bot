@@ -42,17 +42,62 @@ def _player_label(stat: PlayerStats) -> str:
     return f"ID {stat.user_id}"
 
 
+_DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
+_THIN = "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"
+_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+
+def _rank_badge(idx: int) -> str:
+    return _MEDALS.get(idx, f"<b>{idx}.</b>")
+
+
+def _win_rate(st: PlayerStats) -> str:
+    total = st.challenges_won + st.challenges_failed
+    if total == 0:
+        return "—"
+    return f"{round(st.challenges_won * 100 / total)}%"
+
+
+def _format_player_card(idx: int, st: PlayerStats) -> str:
+    return (
+        f"{_rank_badge(idx)} <b>{_player_label(st)}</b> · 💰 <b>{st.score}</b> очк.\n"
+        f"   🎮 игр: {st.games_played}   📦 заказов: {st.orders_completed}\n"
+        f"   ⚔️ испытания: ✅ {st.challenges_won} / ❌ {st.challenges_failed} ({_win_rate(st)})\n"
+        f"   👣 ходов: {st.moves_used}   🚢 переходов: {st.island_travels}"
+    )
+
+
 def _format_stats_table(title: str, rows: list[PlayerStats]) -> str:
     if not rows:
-        return f"<b>{title}</b>\nПока нет данных."
-    lines = [f"<b>{title}</b>"]
-    for idx, st in enumerate(rows, start=1):
-        lines.append(
-            f"{idx}. {_player_label(st)} — <b>{st.score}</b> очк. "
-            f"(игр {st.games_played}, заказов {st.orders_completed}, "
-            f"исп. ✅{st.challenges_won}/❌{st.challenges_failed}, "
-            f"ходов {st.moves_used}, перем. {st.island_travels})"
-        )
+        return f"📊 <b>{title}</b>\n\n<i>Пока нет данных.</i>"
+    cards = "\n".join(
+        _format_player_card(idx, st) + ("" if idx == len(rows) else f"\n{_THIN}")
+        for idx, st in enumerate(rows, start=1)
+    )
+    totals = (
+        f"Σ игр: {sum(s.games_played for s in rows)} · "
+        f"заказов: {sum(s.orders_completed for s in rows)} · "
+        f"испыт.: ✅ {sum(s.challenges_won for s in rows)} / "
+        f"❌ {sum(s.challenges_failed for s in rows)}"
+    )
+    return (
+        f"📊 <b>{title}</b>\n"
+        f"<i>участников: {len(rows)}</i>\n"
+        f"{_DIVIDER}\n"
+        f"{cards}\n"
+        f"{_DIVIDER}\n"
+        f"{totals}"
+    )
+
+
+def _format_final(rows: list[PlayerStats]) -> str:
+    if not rows:
+        return "🏆 <b>Финальный рейтинг «Морской доставки»</b>\n\n<i>Статистики пока нет.</i>"
+    lines = ["🏆 <b>Финальный рейтинг «Морской доставки»</b>", _DIVIDER]
+    for idx, st in enumerate(rows[:20], start=1):
+        lines.append(f"{_rank_badge(idx)} <b>{_player_label(st)}</b> — 💰 <b>{st.score}</b> очк.")
+    lines.append(_DIVIDER)
+    lines.append("🎉 Поздравляем победителей!")
     return "\n".join(lines)
 
 
@@ -234,7 +279,7 @@ def make_sea_admin_router(store: SeaStore, config: Config) -> Router:
             return
         rows = await store.player_stats(message.chat.id)
         await message.answer(
-            _format_stats_table("📊 Статистика игроков (всё событие)", rows[:20]),
+            _format_stats_table("Статистика игроков (всё событие)", rows[:20]),
             parse_mode="HTML",
         )
 
@@ -251,7 +296,7 @@ def make_sea_admin_router(store: SeaStore, config: Config) -> Router:
                 pass
         rows = await store.round_stats(message.chat.id, round_no)
         await message.answer(
-            _format_stats_table(f"📊 Статистика раунда {round_no}", rows[:20]),
+            _format_stats_table(f"Статистика раунда {round_no}", rows[:20]),
             parse_mode="HTML",
         )
 
@@ -259,15 +304,7 @@ def make_sea_admin_router(store: SeaStore, config: Config) -> Router:
     async def cmd_final(message: Message, bot: Bot) -> None:
         # Финальный рейтинг доступен всем — это итоги события.
         rows = await store.player_stats(message.chat.id)
-        if not rows:
-            await message.answer("Статистики пока нет.", parse_mode="HTML")
-            return
-        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-        lines = ["🏆 <b>Финальный рейтинг «Морской доставки»</b>", ""]
-        for idx, st in enumerate(rows[:20], start=1):
-            prefix = medals.get(idx, f"{idx}.")
-            lines.append(f"{prefix} {_player_label(st)} — <b>{st.score}</b> очков")
-        await message.answer("\n".join(lines), parse_mode="HTML")
+        await message.answer(_format_final(rows), parse_mode="HTML")
 
     @router.message(Command("sea_export"))
     async def cmd_export(message: Message, bot: Bot) -> None:
@@ -349,13 +386,11 @@ def make_sea_admin_router(store: SeaStore, config: Config) -> Router:
         elif action == "stats":
             rows = await store.player_stats(chat_id)
             await query.message.answer(
-                _format_stats_table("📊 Статистика игроков", rows[:20]), parse_mode="HTML"
+                _format_stats_table("Статистика игроков", rows[:20]), parse_mode="HTML"
             )
         elif action == "final":
             rows = await store.player_stats(chat_id)
-            await query.message.answer(
-                _format_stats_table("🏆 Финальный рейтинг", rows[:20]), parse_mode="HTML"
-            )
+            await query.message.answer(_format_final(rows), parse_mode="HTML")
         elif action == "export":
             rows = await store.player_stats(chat_id)
             await query.message.answer_document(
