@@ -1,0 +1,35 @@
+# Манифест деплоя на Render.
+# Используется Render Blueprints: https://render.com/docs/blueprint-spec
+#
+# Что объявляется:
+#   - Бесплатный Python web-сервис, запускающий бота в webhook-режиме.
+#   - Необходимые секреты (BOT_TOKEN, DATABASE_URL) — задайте их в дашборде
+#     Render перед первым деплоем (sync: false = не хранить в репозитории).
+#   - Health check на `/healthz`, чтобы Render подтверждал, что сервис жив,
+#     и чтобы UptimeRobot имел стабильный URL для пинга (free-tier засыпает).
+#
+# Хранилище: на бесплатном тарифе Render файловая система эфемерна. Для
+# постоянного хранения состояния игры используйте хостинг Postgres
+# (например, бесплатный Neon) и передавайте строку подключения через
+# DATABASE_URL. Если DATABASE_URL не задан — бот падает на SQLite (DB_PATH),
+# и данные теряются при каждом редеплое.
+
+services:
+  - type: web
+    name: seadelivery-bot
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: PORT
+        value: "8000"
+      # Необязательные переменные (задаются в дашборде Render, не здесь):
+      #   WEBHOOK_URL      — переопределить авто-URL из $RENDER_EXTERNAL_URL.
+      #   OWNER_ID         — Telegram user ID супер-владельца.
+      #   ALLOWED_CHAT_IDS — список chat_id через запятую (whitelist).
+      #                      Пусто = любой чат; задайте, чтобы ограничить бота.
+      #                      Узнать ID чата — командой /chatid.

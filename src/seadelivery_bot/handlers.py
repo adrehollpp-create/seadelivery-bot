@@ -1,0 +1,493 @@
+"""Игровой роутер участников события «Морская доставка».
+
+Все взаимодействия идут через инлайн-кнопки. Свободные сообщения бот читает
+только при наличии хештега :data:`content.HASHTAG`. Кнопки игрока в групповом
+чате может нажимать лишь владелец сессии (id зашит в callback-данные).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+import time
+from contextlib import suppress
+
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message, User
+
+from . import content, engine, service, ui
+from .engine import (
+    FishingOutcome,
+    MinesOutcome,
+    SailOutcome,
+    SharkOutcome,
+    StartOutcome,
+)
+from .models import ChallengeKind, EventState, EventStatus, Session, SessionStatus
+from .service import JoinOutcome, StartSessionOutcome
+from .store import SeaStore
+
+logger = logging.getLogger(__name__)
+
+
+def _has_hashtag(text: str | None) -> bool:
+    return bool(text) and content.HASHTAG.lower() in (text or "").lower()
+
+
+def _user_fields(user: User | None) -> tuple[str | None, str | None]:
+    if user is None:
+        return None, None
+    return user.username, user.full_name
+
+
+def make_sea_router(store: SeaStore) -> Router:
+    """Собрать роутер участников события."""
+    router = Router(name="sea_delivery")
+
+    async def _show_state(message: Message, user: User) -> None:
+        """Отрисовать актуальное состояние новым сообщением (вход через текст/команду)."""
+        chat_id = message.chat.id
+        event = await service.get_event_or_default(store, chat_id)
+
+        if event.status is EventStatus.RECRUITING:
+            count = await store.count_registrations(chat_id, event.recruit_round)
+            if service.recruitment_open(event, count):
+                await message.answer(
+                    ui.render_lobby(event, count),
+                    reply_markup=ui.lobby_keyboard(event.recruit_round),
+                    parse_mode="HTML",
+                )
+                return
+            await message.answer(
+                "Набор на раунд закрыт (время вышло или нет мест). "
+                "Дождитесь запуска раунда администратором.",
+                parse_mode="HTML",
+            )
+            return
+
+        if event.status is EventStatus.ROUND_ACTIVE:
+            result = await service.start_or_resume_session(store, chat_id, user.id)
+            await _send_session_menu(message, result.session, event, result.outcome)
+            return
+
+        if event.status is EventStatus.FINISHED:
+            await message.answer(
+                "🏁 Событие завершено. Итоговый рейтинг — командой <code>/sea_final</code>.",
+                parse_mode="HTML",
+            )
+            return
+
+        await message.answer(
+            "🌊 <b>Морская доставка</b> сейчас не активна.\n"
+            "Дождитесь, пока администратор откроет набор.\n\n" + ui.hashtag_hint(),
+            parse_mode="HTML",
+        )
+
+    async def _send_session_menu(
+        message: Message,
+        session: Session | None,
+        event: EventState,
+        outcome: StartSessionOutcome,
+    ) -> None:
+        if outcome is StartSessionOutcome.NOT_REGISTERED:
+            await message.answer(
+                "Вы не записаны на этот раунд. Запись открывается перед каждым раундом.",
+                parse_mode="HTML",
+            )
+            return
+        if outcome is StartSessionOutcome.ALREADY_PLAYED and session is not None:
+            await message.answer(
+                "Вы уже отыграли свою сессию в этом раунде. Дождитесь следующего раунда.\n\n"
+                + ui.render_session(session, event),
+                parse_mode="HTML",
+            )
+            return
+        if session is None:
+            await message.answer("Сейчас играть нельзя.", parse_mode="HTML")
+            return
+
+        note = "🎉 Сессия началась! У вас 17 ходов." if outcome is StartSessionOutcome.NEW else ""
+        sent = await message.answer(
+            _compose(note, session, event),
+            reply_markup=ui.session_keyboard(session, event),
+            parse_mode="HTML",
+        )
+        session.menu_chat_id = sent.chat.id
+        session.menu_message_id = sent.message_id
+        await store.save_session(session)
+
+    # ---------- точки входа: команда и хештег ----------
+
+    @router.message(Command("sea", "seadelivery"))
+    async def cmd_sea(message: Message) -> None:
+        if message.from_user is None:
+            return
+        await _show_state(message, message.from_user)
+
+    @router.message(F.text.func(_has_hashtag) | F.caption.func(_has_hashtag))
+    async def on_hashtag(message: Message) -> None:
+        if message.from_user is None or message.from_user.is_bot:
+            return
+        await _show_state(message, message.from_user)
+
+    # ---------- запись в набор ----------
+
+    @router.callback_query(F.data.startswith(f"{ui.CB_PREFIX}:join:"))
+    async def cb_join(query: CallbackQuery) -> None:
+        if query.message is None or query.from_user is None or query.data is None:
+            await query.answer()
+            return
+        if not isinstance(query.message, Message):
+            await query.answer()
+            return
+        chat_id = query.message.chat.id
+        username, full_name = _user_fields(query.from_user)
+        outcome, event, count = await service.join_round(
+            store, chat_id, query.from_user.id, username, full_name
+        )
+        messages = {
+            JoinOutcome.OK: f"⚓ Вы записаны! Игроков: {count}/{content.MAX_PLAYERS_PER_ROUND}.",
+            JoinOutcome.ALREADY: "Вы уже записаны на этот раунд.",
+            JoinOutcome.FULL: "Мест больше нет (набрано 12 игроков).",
+            JoinOutcome.CLOSED: "Набор закрыт.",
+        }
+        await query.answer(messages[outcome], show_alert=outcome is not JoinOutcome.OK)
+        if outcome in (JoinOutcome.OK, JoinOutcome.FULL) and isinstance(query.message, Message):
+            with suppress(TelegramBadRequest):
+                await query.message.edit_text(
+                    ui.render_lobby(event, count),
+                    reply_markup=ui.lobby_keyboard(event.recruit_round),
+                    parse_mode="HTML",
+                )
+
+    # ---------- игровые действия ----------
+
+    async def _load_owned_session(query: CallbackQuery, owner_id: int) -> Session | None:
+        """Проверить владельца кнопки и загрузить его активную сессию."""
+        if query.from_user is None or query.message is None:
+            return None
+        if query.from_user.id != owner_id:
+            await query.answer(
+                "Это игровое меню другого игрока. Напишите боту с "
+                f"{content.HASHTAG}, чтобы играть самому.",
+                show_alert=True,
+            )
+            return None
+        chat_id = query.message.chat.id
+        session = await store.get_session(chat_id, owner_id)
+        if session is None or session.status is not SessionStatus.ACTIVE:
+            await query.answer("Активной сессии нет.", show_alert=True)
+            return None
+        return session
+
+    async def _rerender(query: CallbackQuery, session: Session, note: str) -> None:
+        event = await service.get_event_or_default(store, session.chat_id)
+        if isinstance(query.message, Message):
+            session.menu_chat_id = query.message.chat.id
+            session.menu_message_id = query.message.message_id
+        await store.save_session(session)
+        if isinstance(query.message, Message):
+            with suppress(TelegramBadRequest):
+                await query.message.edit_text(
+                    _compose(note, session, event),
+                    reply_markup=ui.session_keyboard(session, event),
+                    parse_mode="HTML",
+                )
+
+    async def _finish_and_render(query: CallbackQuery, session: Session, note: str) -> None:
+        username, full_name = _user_fields(query.from_user)
+        await service.finalize_session(store, session, username, full_name)
+        event = await service.get_event_or_default(store, session.chat_id)
+        if isinstance(query.message, Message):
+            with suppress(TelegramBadRequest):
+                await query.message.edit_text(
+                    _compose(note + "\n\n🏁 Сессия завершена.", session, event),
+                    reply_markup=None,
+                    parse_mode="HTML",
+                )
+
+    @router.callback_query(F.data.regexp(rf"^{ui.CB_PREFIX}:refresh:\d+$"))
+    async def cb_refresh(query: CallbackQuery) -> None:
+        owner_id = _parse_owner(query.data)
+        session = await _load_owned_session(query, owner_id) if owner_id else None
+        if session is None:
+            return
+        await query.answer("Обновлено.")
+        await _rerender(query, session, "")
+
+    @router.callback_query(F.data.regexp(rf"^{ui.CB_PREFIX}:noop:\d+$"))
+    async def cb_noop(query: CallbackQuery) -> None:
+        await query.answer()
+
+    @router.callback_query(F.data.regexp(rf"^{ui.CB_PREFIX}:finish:\d+$"))
+    async def cb_finish(query: CallbackQuery) -> None:
+        owner_id = _parse_owner(query.data)
+        session = await _load_owned_session(query, owner_id) if owner_id else None
+        if session is None:
+            return
+        await query.answer("Завершаем сессию.")
+        await _finish_and_render(query, session, "Вы завершили экспедицию.")
+
+    @router.callback_query(F.data.regexp(rf"^{ui.CB_PREFIX}:order:\d+:\d+$"))
+    async def cb_order(query: CallbackQuery) -> None:
+        owner_id, arg = _parse_owner_arg(query.data)
+        session = await _load_owned_session(query, owner_id) if owner_id else None
+        if session is None:
+            return
+        event = await service.get_event_or_default(store, session.chat_id)
+        if arg is None or arg >= len(event.requests):
+            await query.answer("Заказ недоступен.", show_alert=True)
+            return
+        order = event.requests[arg]
+        rng = random.Random()
+        result = engine.start_route(session, order, rng)
+        if result.outcome is StartOutcome.OK:
+            await query.answer(f"Отплываем на {order.source_island}!")
+            await _rerender(
+                query,
+                session,
+                f"📦 Заказ принят: «{order.needed_item}» для {order.merchant}. "
+                f"Плывём на остров {order.source_island}.",
+            )
+            return
+        alerts = {
+            StartOutcome.NO_MOVES: "Ходы закончились.",
+            StartOutcome.NO_TRAVELS: "Лимит перемещений между островами исчерпан (7).",
+            StartOutcome.BUSY: "Сначала завершите текущий маршрут.",
+            StartOutcome.ALREADY_DONE: "Этот заказ уже выполнен.",
+        }
+        await query.answer(alerts[result.outcome], show_alert=True)
+        if result.outcome is StartOutcome.NO_MOVES and engine.is_exhausted(session):
+            await _finish_and_render(query, session, "Ходы закончились.")
+
+    @router.callback_query(F.data.regexp(rf"^{ui.CB_PREFIX}:sail:\d+$"))
+    async def cb_sail(query: CallbackQuery, bot: Bot) -> None:
+        owner_id = _parse_owner(query.data)
+        session = await _load_owned_session(query, owner_id) if owner_id else None
+        if session is None:
+            return
+        rng = random.Random()
+        result = engine.sail_forward(session, rng)
+        if result.outcome is SailOutcome.BLOCKED:
+            await query.answer("Сейчас плыть нельзя.", show_alert=True)
+            return
+        await query.answer()
+
+        note = _sail_note(result)
+        if result.outcome is SailOutcome.CHALLENGE and result.challenge_kind is not None:
+            note = f"{note}\n\n{ui.challenge_intro(result.challenge_kind)}"
+            await _rerender(query, session, note)
+            if result.challenge_kind is ChallengeKind.FISHING:
+                _schedule_fishing(bot, store, session.chat_id, session.user_id)
+            return
+
+        if engine.is_exhausted(session):
+            await _finish_and_render(query, session, note)
+            return
+        await _rerender(query, session, note)
+
+    # ---------- мини-игра №1: мины ----------
+
+    @router.callback_query(F.data.regexp(rf"^{ui.CB_PREFIX}:mines:\d+:\d+$"))
+    async def cb_mines(query: CallbackQuery) -> None:
+        owner_id, cell = _parse_owner_arg(query.data)
+        session = await _load_owned_session(query, owner_id) if owner_id else None
+        if session is None or cell is None:
+            return
+        result = engine.mines_pick(session, cell, random.Random())
+        if result.outcome is MinesOutcome.BLOCKED:
+            await query.answer()
+            return
+        if result.outcome is MinesOutcome.SAFE:
+            await query.answer(f"Безопасно! {result.safe_found}/{result.safe_total}")
+            await _rerender(query, session, "")
+            return
+        if result.outcome is MinesOutcome.WIN:
+            await query.answer("Все безопасные клетки найдены! 🎉")
+            await _after_challenge(query, session, "✅ Испытание пройдено: путь свободен.")
+            return
+        # BOOM
+        await query.answer("💥 Бомба! Шаг назад.", show_alert=True)
+        await _after_challenge(query, session, "💥 Бомба! Испытание провалено, шаг назад.")
+
+    # ---------- мини-игра №2: рыбалка ----------
+
+    @router.callback_query(F.data.regexp(rf"^{ui.CB_PREFIX}:fish:\d+$"))
+    async def cb_fish(query: CallbackQuery) -> None:
+        owner_id = _parse_owner(query.data)
+        session = await _load_owned_session(query, owner_id) if owner_id else None
+        if session is None:
+            return
+        outcome = engine.fishing_press(session, time.time())
+        if outcome is FishingOutcome.BLOCKED:
+            await query.answer()
+            return
+        if outcome is FishingOutcome.WIN:
+            await query.answer("Поймали! 🐟")
+            await _after_challenge(query, session, "✅ Рыба поймана: путь свободен.")
+            return
+        if outcome is FishingOutcome.TOO_EARLY:
+            await query.answer("Рано! Сорвалось.", show_alert=True)
+            await _after_challenge(query, session, "💨 Поторопились — рыба сорвалась. Шаг назад.")
+            return
+        await query.answer("Не успели!", show_alert=True)
+        await _after_challenge(query, session, "💨 Не успели нажать — рыба ушла. Шаг назад.")
+
+    # ---------- мини-игра №3: акула ----------
+
+    @router.callback_query(F.data.regexp(rf"^{ui.CB_PREFIX}:shark:\d+:(left|straight|right)$"))
+    async def cb_shark(query: CallbackQuery) -> None:
+        owner_id, direction = _parse_owner_dir(query.data)
+        session = await _load_owned_session(query, owner_id) if owner_id else None
+        if session is None or direction is None:
+            return
+        result = engine.shark_pick(session, direction)
+        if result.outcome is SharkOutcome.BLOCKED:
+            await query.answer()
+            return
+        attack_label = content.SHARK_DIRECTION_LABELS.get(result.attack or "", "?")
+        if result.outcome is SharkOutcome.SURVIVED:
+            await query.answer(f"Увернулись! Этап {result.stage}/{result.total_stages}")
+            await _rerender(query, session, f"🦈 Акула метнулась {attack_label} — вы ушли! Дальше…")
+            return
+        if result.outcome is SharkOutcome.WIN:
+            await query.answer("Оторвались от акулы! 🎉")
+            await _after_challenge(query, session, "✅ Вы ушли от акулы: путь свободен.")
+            return
+        await query.answer("Акула достала вас!", show_alert=True)
+        await _after_challenge(
+            query, session, f"🦈 Акула атаковала {attack_label} — провал. Шаг назад."
+        )
+
+    async def _after_challenge(query: CallbackQuery, session: Session, note: str) -> None:
+        if engine.is_exhausted(session):
+            await _finish_and_render(query, session, note)
+            return
+        await _rerender(query, session, note)
+
+    return router
+
+
+# ---------- фоновый таймер рыбалки ----------
+
+
+def _schedule_fishing(bot: Bot, store: SeaStore, chat_id: int, user_id: int) -> None:
+    """Запланировать появление кнопки «ЖМИ!» и таймаут реакции."""
+
+    async def _runner() -> None:
+        rng = random.Random()
+        delay = rng.uniform(content.FISHING_MIN_DELAY, content.FISHING_MAX_DELAY)
+        await asyncio.sleep(delay)
+        session = await store.get_session(chat_id, user_id)
+        if session is None or session.active_challenge is None:
+            return
+        ch = session.active_challenge
+        if ch.kind is not ChallengeKind.FISHING or ch.fishing is None or ch.fishing.armed:
+            return
+        if not engine.fishing_arm(session, time.time()):
+            return
+        await store.save_session(session)
+        event = await service.get_event_or_default(store, chat_id)
+        await _edit_menu(bot, session, _compose("🎣 Поклёвка! ЖМИ!", session, event), event)
+
+        await asyncio.sleep(content.FISHING_REACTION_SECONDS + 0.5)
+        session2 = await store.get_session(chat_id, user_id)
+        if session2 is None:
+            return
+        if not engine.fishing_timeout(session2):
+            return
+        note = "💨 Не успели нажать — рыба ушла. Шаг назад."
+        event2 = await service.get_event_or_default(store, chat_id)
+        if engine.is_exhausted(session2):
+            await service.finalize_session(store, session2, None, None)
+            await _edit_menu(
+                bot,
+                session2,
+                _compose(note + "\n\n🏁 Сессия завершена.", session2, event2),
+                event2,
+                final=True,
+            )
+            return
+        await store.save_session(session2)
+        await _edit_menu(bot, session2, _compose(note, session2, event2), event2)
+
+    asyncio.create_task(_runner())  # noqa: RUF006  (fire-and-forget игровой таймер)
+
+
+async def _edit_menu(
+    bot: Bot, session: Session, text: str, event: EventState, *, final: bool = False
+) -> None:
+    if session.menu_chat_id is None or session.menu_message_id is None:
+        return
+    markup: InlineKeyboardMarkup | None = None
+    if not final:
+        markup = ui.session_keyboard(session, event)
+    with suppress(TelegramBadRequest):
+        await bot.edit_message_text(
+            text=text,
+            chat_id=session.menu_chat_id,
+            message_id=session.menu_message_id,
+            reply_markup=markup,
+            parse_mode="HTML",
+        )
+
+
+# ---------- вспомогательные функции рендера/парсинга ----------
+
+
+def _compose(note: str, session: Session, event: EventState) -> str:
+    body = ui.render_session(session, event)
+    if note:
+        return f"{note}\n\n{body}"
+    return body
+
+
+def _sail_note(result: engine.SailResult) -> str:
+    if result.outcome is SailOutcome.EMPTY:
+        return "🌊 Пустая вода — плывём дальше."
+    if result.outcome is SailOutcome.TREASURE:
+        return f"💰 Сокровище! +{result.treasure_gain} очков и рывок на 2 клетки вперёд."
+    if result.outcome is SailOutcome.DELIVERED:
+        return f"🎁 Заказ доставлен для {result.delivered_merchant}! +{result.reward} очков."
+    if result.outcome is SailOutcome.CHALLENGE:
+        return "⚠️ Впереди испытание!"
+    return ""
+
+
+def _parse_owner(data: str | None) -> int | None:
+    if not data:
+        return None
+    parts = data.split(":")
+    if len(parts) < 3:
+        return None
+    try:
+        return int(parts[2])
+    except ValueError:
+        return None
+
+
+def _parse_owner_arg(data: str | None) -> tuple[int | None, int | None]:
+    if not data:
+        return None, None
+    parts = data.split(":")
+    if len(parts) < 4:
+        return _parse_owner(data), None
+    try:
+        return int(parts[2]), int(parts[3])
+    except ValueError:
+        return None, None
+
+
+def _parse_owner_dir(data: str | None) -> tuple[int | None, str | None]:
+    if not data:
+        return None, None
+    parts = data.split(":")
+    if len(parts) < 4:
+        return _parse_owner(data), None
+    try:
+        return int(parts[2]), parts[3]
+    except ValueError:
+        return None, None
