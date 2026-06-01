@@ -23,7 +23,6 @@ _HELP = (
     "• /sea_stats — рейтинг игроков\n"
     "• /sea_roundstats N — статистика раунда N\n"
     "• /sea_final — финальный рейтинг\n"
-    "• /sea_export — экспорт статистики в CSV\n"
     "• /sea_newevent — сбросить ивент\n\n"
     "/chatid — показать ID этого чата."
 )

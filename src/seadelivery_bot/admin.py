@@ -1,21 +1,18 @@
 """Административный роутер события «Морская доставка».
 
-Управление набором и раундами, просмотр статистики (общей и по раундам),
-экспорт в CSV и финальный рейтинг. Доступно владельцу/администраторам чата
+Управление набором и раундами, просмотр статистики (общей и по раундам)
+и финальный рейтинг. Доступно владельцу/администраторам чата
 (а также супер-владельцу из ``OWNER_ID``).
 """
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
 from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
-    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -101,43 +98,6 @@ def _format_final(rows: list[PlayerStats]) -> str:
     return "\n".join(lines)
 
 
-def _stats_to_csv(rows: list[PlayerStats]) -> bytes:
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(
-        [
-            "rank",
-            "user_id",
-            "username",
-            "full_name",
-            "score",
-            "games_played",
-            "orders_completed",
-            "challenges_won",
-            "challenges_failed",
-            "moves_used",
-            "island_travels",
-        ]
-    )
-    for idx, st in enumerate(rows, start=1):
-        writer.writerow(
-            [
-                idx,
-                st.user_id,
-                st.username or "",
-                st.full_name or "",
-                st.score,
-                st.games_played,
-                st.orders_completed,
-                st.challenges_won,
-                st.challenges_failed,
-                st.moves_used,
-                st.island_travels,
-            ]
-        )
-    return buf.getvalue().encode("utf-8-sig")
-
-
 def _panel_keyboard() -> InlineKeyboardMarkup:
     def btn(text: str, action: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(text=text, callback_data=f"{ADMIN}:{action}")
@@ -147,7 +107,7 @@ def _panel_keyboard() -> InlineKeyboardMarkup:
             [btn("📣 Открыть набор", "open"), btn("▶️ Запустить раунд", "round")],
             [btn("⏹ Завершить раунд", "endround"), btn("👥 Игроки", "players")],
             [btn("📊 Статистика", "stats"), btn("🏆 Финал", "final")],
-            [btn("📁 Экспорт CSV", "export"), btn("🆕 Новое событие", "newevent")],
+            [btn("🆕 Новое событие", "newevent")],
         ]
     )
 
@@ -306,17 +266,6 @@ def make_sea_admin_router(store: SeaStore, config: Config) -> Router:
         rows = await store.player_stats(message.chat.id)
         await message.answer(_format_final(rows), parse_mode="HTML")
 
-    @router.message(Command("sea_export"))
-    async def cmd_export(message: Message, bot: Bot) -> None:
-        if not await _guard(message, bot):
-            return
-        rows = await store.player_stats(message.chat.id)
-        data = _stats_to_csv(rows)
-        await message.answer_document(
-            BufferedInputFile(data, filename=f"sea_delivery_stats_{message.chat.id}.csv"),
-            caption="Экспорт статистики события «Морская доставка».",
-        )
-
     # ---------- callbacks панели ----------
 
     @router.callback_query(F.data.startswith(f"{ADMIN}:"))
@@ -391,14 +340,6 @@ def make_sea_admin_router(store: SeaStore, config: Config) -> Router:
         elif action == "final":
             rows = await store.player_stats(chat_id)
             await query.message.answer(_format_final(rows), parse_mode="HTML")
-        elif action == "export":
-            rows = await store.player_stats(chat_id)
-            await query.message.answer_document(
-                BufferedInputFile(
-                    _stats_to_csv(rows), filename=f"sea_delivery_stats_{chat_id}.csv"
-                ),
-                caption="Экспорт статистики.",
-            )
         elif action == "newevent":
             await store.reset_event(chat_id)
             await query.message.answer(
