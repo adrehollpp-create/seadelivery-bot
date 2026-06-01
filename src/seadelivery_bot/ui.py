@@ -42,20 +42,37 @@ def format_requests(event: EventState) -> str:
     return "\n".join(lines)
 
 
-def _board_strip(session: Session) -> str:
-    if not session.on_route or not session.board:
+_MAP_LEGEND = "🟢 старт · ▫️ пройдено · 🚤 вы · 🌫 впереди · 🏁 цель"
+
+
+def _board_map(session: Session) -> str:
+    """Наглядная эмодзи-карта маршрута: где игрок сейчас и сколько до цели.
+
+    Клетки впереди скрыты «туманом» (🌫) — что на них (сокровище 💎 или
+    испытание ⚔️), игрок узнаёт, доплыв до клетки.
+    """
+    board = session.board
+    if not session.on_route or not board:
         return "—"
-    cells: list[str] = []
-    for idx in range(len(session.board)):
-        if idx == len(session.board) - 1:
-            cells.append("🏝️" if idx != session.position else "🚤")
-        elif idx == session.position:
+    last = len(board) - 1
+    cells: list[str] = ["🟢"]
+    for idx in range(len(board)):
+        if idx == session.position:
             cells.append("🚤")
         elif idx < session.position:
-            cells.append("·")
+            cells.append("▫️")
+        elif idx == last:
+            cells.append("🏁")
         else:
-            cells.append("🌊")
-    return "".join(cells)
+            cells.append("🌫")
+    strip = " ".join(cells)
+    pos_no = session.position + 1
+    to_go = max(0, last - session.position)
+    if to_go > 0:
+        progress = f"📍 Клетка <b>{pos_no}</b> из {len(board)} · до цели ещё <b>{to_go}</b> ▶️"
+    else:
+        progress = f"📍 Клетка <b>{pos_no}</b> из {len(board)} · 🏁 цель достигнута!"
+    return f"{strip}\n{progress}\n<i>{_MAP_LEGEND}</i>"
 
 
 # ---------- лобби / набор ----------
@@ -101,8 +118,9 @@ def render_session(session: Session, event: EventState) -> str:
         lines.append(
             f"Заказ: доставить «{escape(order.needed_item)}» для <b>{escape(order.merchant)}</b>"
         )
-        lines.append(f"Маршрут: {_board_strip(session)}")
-        lines.append(f"Позиция: клетка {session.position + 1} из {len(session.board)}")
+        lines.append("")
+        lines.append("🗺 <b>Курс до острова назначения</b>")
+        lines.append(_board_map(session))
     else:
         lines.append(f"Вы на острове <b>{escape(content.MAIN_ISLAND)}</b>. Выберите заказ.")
 
