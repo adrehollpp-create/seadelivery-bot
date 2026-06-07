@@ -1,8 +1,10 @@
 """Игровой роутер участников события «Морская доставка».
 
-Все взаимодействия идут через инлайн-кнопки. Свободные сообщения бот читает
-только при наличии хештега :data:`content.HASHTAG`. Кнопки игрока в групповом
-чате может нажимать лишь владелец сессии (id зашит в callback-данные).
+Перемещение по маршруту («плыть») управляется текстом: каждое сообщение с
+хештегом :data:`content.HASHTAG` продвигает корабль на один ход. Через кнопки
+идут только мини-игры (испытания) и служебные действия (взять заказ, обновить,
+завершить). Кнопки игрока в групповом чате может нажимать лишь владелец сессии
+(id зашит в callback-данные).
 """
 
 from __future__ import annotations
@@ -119,6 +121,47 @@ def make_sea_router(store: SeaStore) -> Router:
         session.menu_message_id = sent.message_id
         await store.save_session(session)
 
+    async def _post_menu(message: Message, note: str, session: Session) -> None:
+        """Отправить новое сообщение с состоянием и обновить указатель меню."""
+        event = await service.get_event_or_default(store, session.chat_id)
+        sent = await message.answer(
+            _compose(note, session, event),
+            reply_markup=ui.session_keyboard(session, event),
+            parse_mode="HTML",
+        )
+        session.menu_chat_id = sent.chat.id
+        session.menu_message_id = sent.message_id
+        await store.save_session(session)
+
+    async def _sail_via_message(
+        message: Message, bot: Bot, session: Session, user: User
+    ) -> None:
+        """Один ход «плыть» по сообщению с хештегом (текстовое управление)."""
+        rng = random.Random()
+        result = engine.sail_forward(session, rng)
+        if result.outcome is SailOutcome.BLOCKED:
+            await message.answer("Сейчас плыть нельзя.", parse_mode="HTML")
+            return
+
+        note = _sail_note(result)
+        if result.outcome is SailOutcome.CHALLENGE and result.challenge_kind is not None:
+            note = f"{note}\n\n{ui.challenge_intro(result.challenge_kind)}"
+            await _post_menu(message, note, session)
+            if result.challenge_kind is ChallengeKind.FISHING:
+                _schedule_fishing(bot, store, session.chat_id, session.user_id)
+            return
+
+        if engine.is_exhausted(session):
+            username, full_name = _user_fields(user)
+            await service.finalize_session(store, session, username, full_name)
+            event = await service.get_event_or_default(store, session.chat_id)
+            await message.answer(
+                _compose(note + "\n\n🏁 Сессия завершена.", session, event),
+                parse_mode="HTML",
+            )
+            return
+        await _post_menu(message, note, session)
+
     # ---------- точки входа: команда и хештег ----------
 
     @router.message(Command("sea", "seadelivery"))
@@ -128,10 +171,27 @@ def make_sea_router(store: SeaStore) -> Router:
         await _show_state(message, message.from_user)
 
     @router.message(F.text.func(_has_hashtag) | F.caption.func(_has_hashtag))
-    async def on_hashtag(message: Message) -> None:
+    async def on_hashtag(message: Message, bot: Bot) -> None:
         if message.from_user is None or message.from_user.is_bot:
             return
-        await _show_state(message, message.from_user)
+        user = message.from_user
+        chat_id = message.chat.id
+        event = await service.get_event_or_default(store, chat_id)
+        # Во время активного раунда сообщение с хештегом = «плыть на 1 ход»,
+        # если игрок уже в пути и не проходит мини-игру.
+        if event.status is EventStatus.ROUND_ACTIVE:
+            session = await store.get_session(chat_id, user.id)
+            if session is not None and session.status is SessionStatus.ACTIVE:
+                if session.active_challenge is not None:
+                    await message.answer(
+                        "⚠️ Идёт испытание — решайте его кнопками в меню выше.",
+                        parse_mode="HTML",
+                    )
+                    return
+                if session.on_route:
+                    await _sail_via_message(message, bot, session, user)
+                    return
+        await _show_state(message, user)
 
     # ---------- запись в набор ----------
 
@@ -250,7 +310,8 @@ def make_sea_router(store: SeaStore) -> Router:
                 query,
                 session,
                 f"📦 Заказ принят: «{order.needed_item}» для {order.merchant}. "
-                f"Плывём на остров {order.source_island}.",
+                f"Плывём на остров {order.source_island}.\n"
+                f"✍️ Пишите сообщения с {content.HASHTAG} — каждое продвигает корабль на 1 ход.",
             )
             return
         alerts = {

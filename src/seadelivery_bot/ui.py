@@ -121,6 +121,11 @@ def render_session(session: Session, event: EventState) -> str:
         lines.append("")
         lines.append("🗺 <b>Курс до острова назначения</b>")
         lines.append(_board_map(session))
+        lines.append("")
+        lines.append(
+            f"✍️ Чтобы плыть дальше — отправьте сообщение с <b>{content.HASHTAG}</b> "
+            "(1 сообщение = 1 ход)."
+        )
     else:
         lines.append(f"Вы на острове <b>{escape(content.MAIN_ISLAND)}</b>. Выберите заказ.")
 
@@ -143,11 +148,7 @@ def session_keyboard(session: Session, event: EventState) -> InlineKeyboardMarku
     if session.active_challenge is not None:
         return challenge_keyboard(session)
 
-    if session.on_route:
-        rows.append(
-            [InlineKeyboardButton(text="⛵ Плыть вперёд", callback_data=f"{CB_PREFIX}:sail:{uid}")]
-        )
-    else:
+    if not session.on_route:
         for idx, order in enumerate(event.requests):
             if order.merchant in session.completed_orders:
                 label = f"✅ {order.merchant} — выполнено"
