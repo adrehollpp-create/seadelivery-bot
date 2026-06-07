@@ -127,3 +127,63 @@ async def test_session_lifecycle(store: SeaStore) -> None:
 async def test_session_blocked_without_active_round(store: SeaStore) -> None:
     result = await service.start_or_resume_session(store, 1, 10)
     assert result.outcome is service.StartSessionOutcome.NO_ACTIVE_ROUND
+
+
+async def test_goto_round_moves_pointer_and_reopens(store: SeaStore) -> None:
+    # Сыграем 3 раунда.
+    for _ in range(3):
+        await service.open_recruitment(store, 1, now=0.0)
+        await service.start_round(store, 1, random.Random(1))
+        await service.end_round(store, 1)
+    event = await service.get_event_or_default(store, 1)
+    assert event.current_round == 3
+
+    # Вернёмся к раунду 2.
+    res = await service.goto_round(store, 1, 2)
+    assert res.outcome is service.GotoOutcome.OK
+    assert res.event.current_round == 1
+    assert res.event.status is EventStatus.IDLE
+
+    # Открытие набора теперь снова даёт раунд 2.
+    opened = await service.open_recruitment(store, 1, now=0.0)
+    assert opened.outcome is service.OpenOutcome.OK
+    assert opened.event.recruit_round == 2
+
+
+async def test_goto_round_keeps_stats(store: SeaStore) -> None:
+    await service.open_recruitment(store, 1, now=0.0)
+    await service.join_round(store, 1, 10, "alice", "Alice", now=1.0)
+    await service.start_round(store, 1, random.Random(0))
+    new = await service.start_or_resume_session(store, 1, 10)
+    assert new.session is not None
+    new.session.score = 50
+    await service.finalize_session(store, new.session, "alice", "Alice")
+
+    await service.goto_round(store, 1, 1)
+    # Статистика не удаляется при откате.
+    stats = await store.player_stats(1)
+    assert stats and stats[0].score == 50
+
+
+async def test_goto_round_invalid(store: SeaStore) -> None:
+    too_big = await service.goto_round(store, 1, content.TOTAL_ROUNDS + 1)
+    assert too_big.outcome is service.GotoOutcome.INVALID
+    zero = await service.goto_round(store, 1, 0)
+    assert zero.outcome is service.GotoOutcome.INVALID
+
+
+async def test_rollback_round(store: SeaStore) -> None:
+    nothing = await service.rollback_round(store, 1)
+    assert nothing.outcome is service.GotoOutcome.NOTHING
+
+    for _ in range(2):
+        await service.open_recruitment(store, 1, now=0.0)
+        await service.start_round(store, 1, random.Random(1))
+        await service.end_round(store, 1)
+
+    res = await service.rollback_round(store, 1)
+    assert res.outcome is service.GotoOutcome.OK
+    assert res.target == 2
+    # После отката открытие набора снова даёт раунд 2 (переиграть последний).
+    opened = await service.open_recruitment(store, 1, now=0.0)
+    assert opened.event.recruit_round == 2

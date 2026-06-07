@@ -138,6 +138,47 @@ async def start_round(
     return RoundResult(RoundOutcome.OK, event)
 
 
+class GotoOutcome(StrEnum):
+    OK = "ok"
+    INVALID = "invalid"  # номер раунда вне диапазона 1..TOTAL_ROUNDS
+    NOTHING = "nothing"  # откатывать нечего (раунды ещё не запускались)
+
+
+@dataclass
+class GotoResult:
+    outcome: GotoOutcome
+    event: EventState
+    target: int = 0
+
+
+async def goto_round(store: SeaStore, chat_id: int, target: int) -> GotoResult:
+    """Перевести событие к раунду ``target`` (1..TOTAL_ROUNDS), не трогая статистику.
+
+    Сдвигается только указатель раунда: выставляется ``current_round = target - 1`` и
+    статус ``IDLE``, чтобы администратор мог заново открыть набор именно на ``target``.
+    Сыгранная статистика, регистрации и сессии не удаляются.
+    """
+    event = await get_event_or_default(store, chat_id)
+    if target < 1 or target > content.TOTAL_ROUNDS:
+        return GotoResult(GotoOutcome.INVALID, event, target)
+
+    event.current_round = target - 1
+    event.recruit_round = target - 1
+    event.status = EventStatus.IDLE
+    event.requests = []
+    event.recruit_deadline = None
+    await store.save_event(event)
+    return GotoResult(GotoOutcome.OK, event, target)
+
+
+async def rollback_round(store: SeaStore, chat_id: int) -> GotoResult:
+    """Откатиться на один раунд назад: переоткрыть последний запущенный раунд."""
+    event = await get_event_or_default(store, chat_id)
+    if event.current_round < 1:
+        return GotoResult(GotoOutcome.NOTHING, event, 0)
+    return await goto_round(store, chat_id, event.current_round)
+
+
 async def end_round(store: SeaStore, chat_id: int) -> RoundResult:
     """Завершить текущий раунд (после пятого — событие финализируется)."""
     event = await get_event_or_default(store, chat_id)

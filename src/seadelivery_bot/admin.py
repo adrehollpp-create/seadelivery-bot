@@ -23,7 +23,7 @@ from . import content, service, ui
 from .config import Config
 from .models import EventStatus, PlayerStats
 from .permissions import is_chat_admin
-from .service import OpenOutcome, RoundOutcome
+from .service import GotoOutcome, OpenOutcome, RoundOutcome
 from .store import SeaStore
 
 logger = logging.getLogger(__name__)
@@ -106,9 +106,26 @@ def _panel_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [btn("📣 Открыть набор", "open"), btn("▶️ Запустить раунд", "round")],
             [btn("⏹ Завершить раунд", "endround"), btn("👥 Игроки", "players")],
+            [btn("◀️ Откатить раунд", "rollback"), btn("🎯 Перейти к раунду", "goto")],
             [btn("📊 Статистика", "stats"), btn("🏆 Финал", "final")],
             [btn("🆕 Новое событие", "newevent")],
         ]
+    )
+
+
+def _goto_keyboard() -> InlineKeyboardMarkup:
+    row = [
+        InlineKeyboardButton(text=str(n), callback_data=f"{ADMIN}:goto:{n}")
+        for n in range(1, content.TOTAL_ROUNDS + 1)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[row])
+
+
+def _goto_done_text(target: int) -> str:
+    return (
+        f"🎯 Готово: указатель переведён к <b>раунду {target}</b>.\n"
+        "Статистика и регистрации не тронуты. Чтобы запустить этот раунд — "
+        "нажмите «📣 Открыть набор», затем «▶️ Запустить раунд»."
     )
 
 
@@ -211,6 +228,42 @@ def make_sea_admin_router(store: SeaStore, config: Config) -> Router:
         else:
             text += "\n\nСледующий набор: <code>/sea_open</code>."
         await message.answer(text, parse_mode="HTML")
+
+    @router.message(Command("sea_rollback"))
+    async def cmd_rollback(message: Message, bot: Bot) -> None:
+        if not await _guard(message, bot):
+            return
+        result = await service.rollback_round(store, message.chat.id)
+        if result.outcome is GotoOutcome.NOTHING:
+            await message.answer(
+                "Откатывать нечего — раунды ещё не запускались.", parse_mode="HTML"
+            )
+            return
+        await message.answer(_goto_done_text(result.target), parse_mode="HTML")
+
+    @router.message(Command("sea_goto"))
+    async def cmd_goto(message: Message, command: CommandObject, bot: Bot) -> None:
+        if not await _guard(message, bot):
+            return
+        if not command.args:
+            await message.answer(
+                "Выберите раунд:",
+                reply_markup=_goto_keyboard(),
+                parse_mode="HTML",
+            )
+            return
+        try:
+            target = int(command.args.strip().split()[0])
+        except ValueError:
+            await message.answer("Укажите номер раунда числом, например <code>/sea_goto 3</code>.")
+            return
+        result = await service.goto_round(store, message.chat.id, target)
+        if result.outcome is GotoOutcome.INVALID:
+            await message.answer(
+                f"Номер раунда должен быть от 1 до {content.TOTAL_ROUNDS}.", parse_mode="HTML"
+            )
+            return
+        await message.answer(_goto_done_text(result.target), parse_mode="HTML")
 
     @router.message(Command("sea_players"))
     async def cmd_players(message: Message, bot: Bot) -> None:
@@ -332,6 +385,33 @@ def make_sea_admin_router(store: SeaStore, config: Config) -> Router:
                     )
                     lines.append(f"• {label}")
                 await query.message.answer("\n".join(lines), parse_mode="HTML")
+        elif action == "rollback":
+            roll_res = await service.rollback_round(store, chat_id)
+            if roll_res.outcome is GotoOutcome.NOTHING:
+                await query.message.answer(
+                    "Откатывать нечего — раунды ещё не запускались.", parse_mode="HTML"
+                )
+            else:
+                await query.message.answer(_goto_done_text(roll_res.target), parse_mode="HTML")
+        elif action == "goto":
+            await query.message.answer(
+                "🎯 К какому раунду вернуться? Указатель сдвинется, статистика останется.",
+                reply_markup=_goto_keyboard(),
+                parse_mode="HTML",
+            )
+        elif action.startswith("goto:"):
+            try:
+                target = int(action.split(":")[1])
+            except (ValueError, IndexError):
+                await query.message.answer("Неверный номер раунда.", parse_mode="HTML")
+                return
+            goto_res = await service.goto_round(store, chat_id, target)
+            if goto_res.outcome is GotoOutcome.INVALID:
+                await query.message.answer(
+                    f"Номер раунда должен быть от 1 до {content.TOTAL_ROUNDS}.", parse_mode="HTML"
+                )
+            else:
+                await query.message.answer(_goto_done_text(goto_res.target), parse_mode="HTML")
         elif action == "stats":
             rows = await store.player_stats(chat_id)
             await query.message.answer(
