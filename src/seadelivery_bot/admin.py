@@ -185,8 +185,11 @@ def make_sea_admin_router(store: SeaStore, config: Config) -> Router:
                 parse_mode="HTML",
             )
             return
+        open_count = await store.count_registrations(
+            message.chat.id, result.event.recruit_round
+        )
         await message.answer(
-            ui.render_lobby(result.event, 0),
+            ui.render_lobby(result.event, open_count),
             reply_markup=ui.lobby_keyboard(result.event.recruit_round),
             parse_mode="HTML",
         )
@@ -339,8 +342,11 @@ def make_sea_admin_router(store: SeaStore, config: Config) -> Router:
         if action == "open":
             open_res = await service.open_recruitment(store, chat_id)
             if open_res.outcome is OpenOutcome.OK:
+                open_count = await store.count_registrations(
+                    chat_id, open_res.event.recruit_round
+                )
                 await query.message.answer(
-                    ui.render_lobby(open_res.event, 0),
+                    ui.render_lobby(open_res.event, open_count),
                     reply_markup=ui.lobby_keyboard(open_res.event.recruit_round),
                     parse_mode="HTML",
                 )

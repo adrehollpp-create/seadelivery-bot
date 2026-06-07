@@ -95,7 +95,10 @@ def lobby_keyboard(round_no: int) -> InlineKeyboardMarkup:
     join_button = InlineKeyboardButton(
         text="⚓ Записаться", callback_data=f"{CB_PREFIX}:join:{round_no}"
     )
-    return InlineKeyboardMarkup(inline_keyboard=[[join_button]])
+    leave_button = InlineKeyboardButton(
+        text="🚪 Выйти из раунда", callback_data=f"{CB_PREFIX}:leave:{round_no}"
+    )
+    return InlineKeyboardMarkup(inline_keyboard=[[join_button], [leave_button]])
 
 
 # ---------- статус сессии ----------

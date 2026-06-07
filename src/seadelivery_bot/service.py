@@ -104,6 +104,31 @@ async def join_round(
     return JoinOutcome.OK, event, count
 
 
+class LeaveOutcome(StrEnum):
+    OK = "ok"
+    NOT_REGISTERED = "not_registered"  # игрок и так не записан
+    CLOSED = "closed"  # набор не идёт (раунд уже запущен/не открыт)
+
+
+async def leave_round(
+    store: SeaStore,
+    chat_id: int,
+    user_id: int,
+) -> tuple[LeaveOutcome, EventState, int]:
+    """Снять игрока с набора текущего раунда, пока набор ещё открыт."""
+    event = await get_event_or_default(store, chat_id)
+    round_no = event.recruit_round
+    if event.status is not EventStatus.RECRUITING:
+        count = await store.count_registrations(chat_id, round_no)
+        return LeaveOutcome.CLOSED, event, count
+
+    removed = await store.remove_registration(chat_id, round_no, user_id)
+    count = await store.count_registrations(chat_id, round_no)
+    if not removed:
+        return LeaveOutcome.NOT_REGISTERED, event, count
+    return LeaveOutcome.OK, event, count
+
+
 # ---------- раунды ----------
 
 

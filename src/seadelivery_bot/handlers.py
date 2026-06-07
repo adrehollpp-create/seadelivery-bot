@@ -29,7 +29,7 @@ from .engine import (
     StartOutcome,
 )
 from .models import ChallengeKind, EventState, EventStatus, Session, SessionStatus
-from .service import JoinOutcome, StartSessionOutcome
+from .service import JoinOutcome, LeaveOutcome, StartSessionOutcome
 from .store import SeaStore
 
 logger = logging.getLogger(__name__)
@@ -195,6 +195,15 @@ def make_sea_router(store: SeaStore) -> Router:
 
     # ---------- запись в набор ----------
 
+    async def _refresh_lobby(message: Message, event: EventState, count: int) -> None:
+        """Перерисовать сообщение лобби с актуальным числом записавшихся."""
+        with suppress(TelegramBadRequest):
+            await message.edit_text(
+                ui.render_lobby(event, count),
+                reply_markup=ui.lobby_keyboard(event.recruit_round),
+                parse_mode="HTML",
+            )
+
     @router.callback_query(F.data.startswith(f"{ui.CB_PREFIX}:join:"))
     async def cb_join(query: CallbackQuery) -> None:
         if query.message is None or query.from_user is None or query.data is None:
@@ -215,13 +224,27 @@ def make_sea_router(store: SeaStore) -> Router:
             JoinOutcome.CLOSED: "Набор закрыт.",
         }
         await query.answer(messages[outcome], show_alert=outcome is not JoinOutcome.OK)
-        if outcome in (JoinOutcome.OK, JoinOutcome.FULL) and isinstance(query.message, Message):
-            with suppress(TelegramBadRequest):
-                await query.message.edit_text(
-                    ui.render_lobby(event, count),
-                    reply_markup=ui.lobby_keyboard(event.recruit_round),
-                    parse_mode="HTML",
-                )
+        # Всегда обновляем лобби свежим числом — чтобы счётчик не «застывал».
+        await _refresh_lobby(query.message, event, count)
+
+    @router.callback_query(F.data.startswith(f"{ui.CB_PREFIX}:leave:"))
+    async def cb_leave(query: CallbackQuery) -> None:
+        if query.message is None or query.from_user is None or query.data is None:
+            await query.answer()
+            return
+        if not isinstance(query.message, Message):
+            await query.answer()
+            return
+        chat_id = query.message.chat.id
+        outcome, event, count = await service.leave_round(store, chat_id, query.from_user.id)
+        left_msg = f"🚪 Вы вышли из раунда. Игроков: {count}/{content.MAX_PLAYERS_PER_ROUND}."
+        messages = {
+            LeaveOutcome.OK: left_msg,
+            LeaveOutcome.NOT_REGISTERED: "Вы и так не записаны на этот раунд.",
+            LeaveOutcome.CLOSED: "Набор уже закрыт — выйти нельзя.",
+        }
+        await query.answer(messages[outcome], show_alert=outcome is not LeaveOutcome.OK)
+        await _refresh_lobby(query.message, event, count)
 
     # ---------- игровые действия ----------
 

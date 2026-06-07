@@ -212,6 +212,9 @@ class SeaStore(ABC):
     async def is_registered(self, chat_id: int, round_no: int, user_id: int) -> bool: ...
 
     @abstractmethod
+    async def remove_registration(self, chat_id: int, round_no: int, user_id: int) -> bool: ...
+
+    @abstractmethod
     async def list_registrations(
         self, chat_id: int, round_no: int
     ) -> list[tuple[int, str | None, str | None]]: ...
@@ -359,6 +362,17 @@ class SqliteSeaStore(SeaStore):
             (chat_id, round_no, user_id),
         ) as cur:
             return await cur.fetchone() is not None
+
+    async def remove_registration(self, chat_id: int, round_no: int, user_id: int) -> bool:
+        cur = await self._c.execute(
+            """
+            DELETE FROM sea_registrations
+            WHERE chat_id = ? AND round_no = ? AND user_id = ?
+            """,
+            (chat_id, round_no, user_id),
+        )
+        await self._c.commit()
+        return cur.rowcount > 0
 
     async def list_registrations(
         self, chat_id: int, round_no: int
@@ -615,6 +629,18 @@ class PostgresSeaStore(SeaStore):
             user_id,
         )
         return row is not None
+
+    async def remove_registration(self, chat_id: int, round_no: int, user_id: int) -> bool:
+        status = await self._p.execute(
+            """
+            DELETE FROM sea_registrations
+            WHERE chat_id = $1 AND round_no = $2 AND user_id = $3
+            """,
+            chat_id,
+            round_no,
+            user_id,
+        )
+        return _affected_rows(status) > 0
 
     async def list_registrations(
         self, chat_id: int, round_no: int

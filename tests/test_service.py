@@ -62,6 +62,36 @@ async def test_join_closed_when_not_recruiting(store: SeaStore) -> None:
     assert outcome is service.JoinOutcome.CLOSED
 
 
+async def test_leave_round_flow(store: SeaStore) -> None:
+    await service.open_recruitment(store, 1, now=0.0)
+    await service.join_round(store, 1, 10, "alice", "Alice", now=1.0)
+    assert await store.count_registrations(1, 1) == 1
+
+    # Выход снимает регистрацию и уменьшает счётчик.
+    outcome, _, count = await service.leave_round(store, 1, 10)
+    assert outcome is service.LeaveOutcome.OK
+    assert count == 0
+
+    # Повторный выход — игрок уже не записан.
+    again, _, _ = await service.leave_round(store, 1, 10)
+    assert again is service.LeaveOutcome.NOT_REGISTERED
+
+    # После выхода можно записаться снова.
+    rejoin, _, recount = await service.join_round(store, 1, 10, "alice", "Alice", now=2.0)
+    assert rejoin is service.JoinOutcome.OK
+    assert recount == 1
+
+
+async def test_leave_round_closed_when_not_recruiting(store: SeaStore) -> None:
+    await service.open_recruitment(store, 1, now=0.0)
+    await service.join_round(store, 1, 10, "alice", "Alice", now=1.0)
+    await service.start_round(store, 1, random.Random(0))
+    # Раунд уже идёт — выйти нельзя, регистрация сохраняется.
+    outcome, _, _ = await service.leave_round(store, 1, 10)
+    assert outcome is service.LeaveOutcome.CLOSED
+    assert await store.is_registered(1, 1, 10)
+
+
 async def test_start_and_end_round(store: SeaStore) -> None:
     await service.open_recruitment(store, 1, now=0.0)
     started = await service.start_round(store, 1, random.Random(0))
