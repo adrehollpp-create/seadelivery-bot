@@ -31,18 +31,17 @@ def hashtag_hint() -> str:
 
 def format_requests(event: EventState) -> str:
     if not event.requests:
-        return "Активных запросов нет."
-    lines = [f"<b>Запросы торговцев (раунд {event.current_round}):</b>"]
+        return "Сейчас заказов нет."
+    lines = [f"📋 <b>Заказы торговцев · раунд {event.current_round}</b>"]
     for order in event.requests:
         lines.append(
-            f"• <b>{escape(order.merchant)}</b> (везёт «{escape(order.owned_item)}») "
-            f"просит доставить «{escape(order.needed_item)}» "
-            f"с острова <i>{escape(order.source_island)}</i>"
+            f"• <b>{escape(order.merchant)}</b> ждёт <b>{escape(order.needed_item)}</b> "
+            f"— забрать на острове <b>{escape(order.source_island)}</b>"
         )
     return "\n".join(lines)
 
 
-_MAP_LEGEND = "🟢 старт · ▫️ пройдено · 🚤 вы · 🌫 впереди · 🏁 цель"
+_MAP_LEGEND = "🟢 старт · ▫️ позади · 🚤 ваш корабль · 🌫 впереди · 🏁 место доставки"
 
 
 def _board_map(session: Session) -> str:
@@ -69,9 +68,12 @@ def _board_map(session: Session) -> str:
     pos_no = session.position + 1
     to_go = max(0, last - session.position)
     if to_go > 0:
-        progress = f"📍 Клетка <b>{pos_no}</b> из {len(board)} · до цели ещё <b>{to_go}</b> ▶️"
+        progress = (
+            f"📍 Вы на клетке <b>{pos_no}</b> из <b>{len(board)}</b> "
+            f"· плыть ещё <b>{to_go}</b> ▶️"
+        )
     else:
-        progress = f"📍 Клетка <b>{pos_no}</b> из {len(board)} · 🏁 цель достигнута!"
+        progress = f"📍 Клетка <b>{pos_no}</b> из <b>{len(board)}</b> · 🏁 вы на месте!"
     return f"{strip}\n{progress}\n<i>{_MAP_LEGEND}</i>"
 
 
@@ -80,13 +82,13 @@ def _board_map(session: Session) -> str:
 
 def render_lobby(event: EventState, registered_count: int) -> str:
     lines = [
-        "🌊 <b>Морская доставка</b> — событие открыто!",
+        "🌊 <b>Морская доставка</b> — набор открыт!",
         "",
-        f"Идёт набор на раунд <b>{event.recruit_round}</b> из {content.TOTAL_ROUNDS}.",
-        f"Записалось: <b>{registered_count}/{content.MAX_PLAYERS_PER_ROUND}</b>.",
-        "Набор длится до часа или пока не наберётся максимум игроков.",
+        f"🚢 Раунд <b>{event.recruit_round}</b> из {content.TOTAL_ROUNDS}",
+        f"👥 Записалось: <b>{registered_count} из {content.MAX_PLAYERS_PER_ROUND}</b>",
         "",
-        "Нажмите кнопку ниже, чтобы записаться.",
+        "Набор идёт до часа или пока не наберётся 12 игроков.",
+        "⚓ Жмите <b>«Записаться»</b> ниже. Передумали — <b>«Выйти из раунда»</b>.",
     ]
     return "\n".join(lines)
 
@@ -106,39 +108,46 @@ def lobby_keyboard(round_no: int) -> InlineKeyboardMarkup:
 
 def render_session(session: Session, event: EventState) -> str:
     order = session.active_order
+    place = escape(session.current_island or content.MAIN_ISLAND)
     lines = [
-        "🧭 <b>Морская доставка</b>",
-        f"Раунд: <b>{session.round_no}</b>",
-        f"Ходов осталось: <b>{session.moves_left}</b> / {content.MOVES_PER_SESSION}",
-        (
-            f"Перемещений между островами: <b>{session.travels_used}</b>"
-            f" / {content.MAX_ISLAND_TRAVELS}"
-        ),
-        f"Текущее место: <b>{escape(session.current_island or content.MAIN_ISLAND)}</b>",
-        f"Очки: <b>{session.score}</b>",
+        f"🧭 <b>Морская доставка</b> · раунд <b>{session.round_no}</b>",
+        "",
+        f"🚩 <b>Ходов осталось: {session.moves_left} из {content.MOVES_PER_SESSION}</b>",
+        f"⭐ Очки: <b>{session.score}</b>",
+        f"📍 Где вы: <b>{place}</b>",
     ]
     if session.on_route and order is not None:
         lines.append(
-            f"Заказ: доставить «{escape(order.needed_item)}» для <b>{escape(order.merchant)}</b>"
+            f"📦 Везёте <b>{escape(order.needed_item)}</b> для <b>{escape(order.merchant)}</b>"
         )
         lines.append("")
-        lines.append("🗺 <b>Курс до острова назначения</b>")
+        lines.append("🗺 <b>Сколько плыть до места доставки:</b>")
         lines.append(_board_map(session))
         lines.append("")
         lines.append(
-            f"✍️ Чтобы плыть дальше — отправьте сообщение с <b>{content.HASHTAG}</b> "
-            "(1 сообщение = 1 ход)."
+            f"✍️ <b>Чтобы плыть дальше — напишите сообщение с {content.HASHTAG}.</b>\n"
+            "Одно сообщение = один шаг вперёд."
         )
     else:
-        lines.append(f"Вы на острове <b>{escape(content.MAIN_ISLAND)}</b>. Выберите заказ.")
+        lines.append(
+            f"🏝 Вы в порту <b>{escape(content.MAIN_ISLAND)}</b>. "
+            "Нажмите кнопку ниже и выберите, кому везём заказ."
+        )
 
     completed = (
         ", ".join(escape(m) for m in session.completed_orders) if session.completed_orders else "—"
     )
-    lines.append(f"Выполнено заказов: {session.orders_completed} ({completed})")
-    lines.append(f"Испытания: ✅ {session.challenges_won} / ❌ {session.challenges_failed}")
+    lines.append("")
+    lines.append(
+        f"🚢 Поездок за товаром: <b>{session.travels_used} из {content.MAX_ISLAND_TRAVELS}</b>"
+    )
+    lines.append(f"✅ Доставлено заказов: <b>{session.orders_completed}</b> ({completed})")
+    lines.append(
+        f"🎮 Испытания: выиграно <b>{session.challenges_won}</b>, "
+        f"проиграно <b>{session.challenges_failed}</b>"
+    )
     bonuses = "; ".join(escape(b) for b in session.bonuses[-4:]) if session.bonuses else "—"
-    lines.append(f"Бонусы: {bonuses}")
+    lines.append(f"🎁 Последние бонусы: {bonuses}")
     lines.append("")
     lines.append(format_requests(event))
     return "\n".join(lines)
@@ -220,16 +229,17 @@ def challenge_keyboard(session: Session) -> InlineKeyboardMarkup:
 def challenge_intro(kind: ChallengeKind) -> str:
     if kind is ChallengeKind.MINES:
         return (
-            "⚠️ <b>Испытание: поиск безопасных клеток</b>\n"
-            f"Найдите все {content.MINES_SAFE_CELLS} безопасные клетки из "
+            "⚠️ <b>Испытание: минное поле</b>\n"
+            f"Откройте <b>{content.MINES_SAFE_CELLS}</b> безопасные клетки из "
             f"{content.MINES_TOTAL_CELLS}. Попадёте на бомбу — провал и шаг назад."
         )
     if kind is ChallengeKind.FISHING:
         return (
             "🎣 <b>Испытание: рыбалка</b>\n"
-            "Ждите поклёвки. Как появится кнопка «ЖМИ!» — жмите как можно быстрее!"
+            "Ждите поклёвки. Как появится кнопка <b>«ЖМИ!»</b> — жмите как можно быстрее!"
         )
     return (
         "🦈 <b>Испытание: побег от акулы</b>\n"
-        f"Пройдите {content.SHARK_STAGES} этапа: выбирайте направление, куда НЕ метит акула."
+        f"Пройдите <b>{content.SHARK_STAGES}</b> этапа: выбирайте направление, "
+        "куда <b>НЕ</b> метит акула."
     )

@@ -111,7 +111,11 @@ def make_sea_router(store: SeaStore) -> Router:
             await message.answer("Сейчас играть нельзя.", parse_mode="HTML")
             return
 
-        note = "🎉 Сессия началась! У вас 17 ходов." if outcome is StartSessionOutcome.NEW else ""
+        note = (
+            f"🎉 <b>Игра началась!</b> У вас <b>{content.MOVES_PER_SESSION} ходов</b>."
+            if outcome is StartSessionOutcome.NEW
+            else ""
+        )
         sent = await message.answer(
             _compose(note, session, event),
             reply_markup=ui.session_keyboard(session, event),
@@ -332,15 +336,15 @@ def make_sea_router(store: SeaStore) -> Router:
             await _rerender(
                 query,
                 session,
-                f"📦 Заказ принят: «{order.needed_item}» для {order.merchant}. "
-                f"Плывём на остров {order.source_island}.\n"
-                f"✍️ Пишите сообщения с {content.HASHTAG} — каждое продвигает корабль на 1 ход.",
+                f"📦 Берём заказ: везём <b>{order.needed_item}</b> для <b>{order.merchant}</b>.\n"
+                f"🧭 Плывём на остров <b>{order.source_island}</b>.\n"
+                f"✍️ Пишите сообщения с <b>{content.HASHTAG}</b> — каждое = шаг вперёд.",
             )
             return
         alerts = {
             StartOutcome.NO_MOVES: "Ходы закончились.",
-            StartOutcome.NO_TRAVELS: "Лимит перемещений между островами исчерпан (7).",
-            StartOutcome.BUSY: "Сначала завершите текущий маршрут.",
+            StartOutcome.NO_TRAVELS: "Больше поездок за товаром нет (лимит 7).",
+            StartOutcome.BUSY: "Сначала доплывите до текущего места.",
             StartOutcome.ALREADY_DONE: "Этот заказ уже выполнен.",
         }
         await query.answer(alerts[result.outcome], show_alert=True)
@@ -529,11 +533,24 @@ def _compose(note: str, session: Session, event: EventState) -> str:
     return body
 
 
+def _plural_cells(n: int) -> str:
+    """Согласование слова «клетка» с числом (1 клетку, 2 клетки, 5 клеток)."""
+    if n % 10 == 1 and n % 100 != 11:
+        return "клетку"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return "клетки"
+    return "клеток"
+
+
 def _sail_note(result: engine.SailResult) -> str:
     if result.outcome is SailOutcome.EMPTY:
         return "🌊 Пустая вода — плывём дальше."
     if result.outcome is SailOutcome.TREASURE:
-        return f"💰 Сокровище! +{result.treasure_gain} очков и рывок на 2 клетки вперёд."
+        steps = result.treasure_steps
+        return (
+            f"💰 Сокровище! +{result.treasure_gain} очков, "
+            f"корабль рванул вперёд на {steps} {_plural_cells(steps)}."
+        )
     if result.outcome is SailOutcome.DELIVERED:
         return f"🎁 Заказ доставлен для {result.delivered_merchant}! +{result.reward} очков."
     if result.outcome is SailOutcome.CHALLENGE:

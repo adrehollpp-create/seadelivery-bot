@@ -132,9 +132,33 @@ def test_sail_treasure_advances_two_and_scores() -> None:
     result = engine.sail_forward(session, random.Random())
     assert result.outcome is engine.SailOutcome.TREASURE
     assert result.treasure_gain == content.TREASURE_BONUS
+    assert result.treasure_steps == content.TREASURE_ADVANCE
     # 1 (шаг) + 2 (рывок сокровища) = клетка 3
     assert session.position == 3
     assert session.score == content.TREASURE_BONUS
+
+
+def test_sail_chained_treasure_reports_total_gain_and_steps() -> None:
+    # Сокровище на клетке 1 кидает на клетку 3, где снова сокровище — эффект цепочки
+    # должен суммироваться (а не списываться как одно), чтобы числа были честными.
+    board = [
+        CellType.EMPTY,
+        CellType.TREASURE,
+        CellType.EMPTY,
+        CellType.TREASURE,
+        CellType.EMPTY,
+        CellType.EMPTY,
+        CellType.EMPTY,
+    ]
+    session = _route_session(board)
+    result = engine.sail_forward(session, random.Random())
+    assert result.outcome is engine.SailOutcome.TREASURE
+    # Один ход списан — позиция 1, затем два рывка по 2: 1 -> 3 -> 5.
+    assert session.moves_left == content.MOVES_PER_SESSION - 1
+    assert session.position == 5
+    assert result.treasure_gain == content.TREASURE_BONUS * 2
+    assert result.treasure_steps == content.TREASURE_ADVANCE * 2
+    assert session.score == content.TREASURE_BONUS * 2
 
 
 def test_sail_treasure_can_complete_delivery() -> None:
