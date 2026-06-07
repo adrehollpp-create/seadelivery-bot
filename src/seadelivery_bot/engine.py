@@ -115,7 +115,11 @@ class StartResult:
 
 
 def start_route(session: Session, order: Order, rng: random.Random) -> StartResult:
-    """Отправиться на остров за товаром и проложить маршрут (стоит 1 ход и 1 перемещение)."""
+    """Отправиться на остров за товаром и проложить маршрут (стоит 1 перемещение).
+
+    Ход за взятие заказа НЕ списывается — ходы тратятся только когда игрок плывёт
+    (сообщение с хештегом) и в мини-играх.
+    """
     if session.status is not SessionStatus.ACTIVE:
         return StartResult(StartOutcome.BUSY)
     if session.on_route or session.active_challenge is not None:
@@ -127,8 +131,6 @@ def start_route(session: Session, order: Order, rng: random.Random) -> StartResu
     if session.travels_used >= content.MAX_ISLAND_TRAVELS:
         return StartResult(StartOutcome.NO_TRAVELS)
 
-    session.moves_left -= 1
-    session.moves_used += 1
     session.travels_used += 1
     session.on_route = True
     session.position = 0

@@ -69,13 +69,15 @@ def test_generate_board_zero_budget_has_no_challenges() -> None:
 # ---------- старт маршрута ----------
 
 
-def test_start_route_consumes_move_and_travel() -> None:
+def test_start_route_consumes_travel_only() -> None:
     session = engine.new_session(1, 2, 1)
     order = engine.pick_round_requests(random.Random(0))[0]
     result = engine.start_route(session, order, random.Random(0))
     assert result.outcome is engine.StartOutcome.OK
     assert session.on_route is True
-    assert session.moves_left == content.MOVES_PER_SESSION - 1
+    # Взятие заказа не тратит ход — только перемещение.
+    assert session.moves_left == content.MOVES_PER_SESSION
+    assert session.moves_used == 0
     assert session.travels_used == 1
     assert session.board
 
