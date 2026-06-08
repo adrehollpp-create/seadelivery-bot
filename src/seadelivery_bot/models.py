@@ -169,6 +169,9 @@ class Session:
     bonuses: list[str] = field(default_factory=list)
     menu_chat_id: int | None = None
     menu_message_id: int | None = None
+    # Имя/username владельца — для пометки в подписи карточки (чья строка).
+    owner_name: str | None = None
+    owner_username: str | None = None
     # Счётчики статистики, накопленные за сессию.
     orders_completed: int = 0
     challenges_won: int = 0
@@ -197,6 +200,8 @@ class Session:
             "bonuses": list(self.bonuses),
             "menu_chat_id": self.menu_chat_id,
             "menu_message_id": self.menu_message_id,
+            "owner_name": self.owner_name,
+            "owner_username": self.owner_username,
             "orders_completed": self.orders_completed,
             "challenges_won": self.challenges_won,
             "challenges_failed": self.challenges_failed,
@@ -229,6 +234,12 @@ class Session:
             ),
             menu_message_id=(
                 int(data["menu_message_id"]) if data.get("menu_message_id") is not None else None
+            ),
+            owner_name=(
+                str(data["owner_name"]) if data.get("owner_name") is not None else None
+            ),
+            owner_username=(
+                str(data["owner_username"]) if data.get("owner_username") is not None else None
             ),
             orders_completed=int(data.get("orders_completed", 0)),
             challenges_won=int(data.get("challenges_won", 0)),

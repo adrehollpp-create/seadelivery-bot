@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import random
 import time
@@ -52,6 +53,14 @@ def _user_fields(user: User | None) -> tuple[str | None, str | None]:
     return user.username, user.full_name
 
 
+def _set_owner(session: Session, user: User | None) -> None:
+    """Запомнить владельца сессии, чтобы помечать его в подписи карточки."""
+    if user is None:
+        return
+    session.owner_name = user.full_name
+    session.owner_username = user.username
+
+
 def make_sea_router(store: SeaStore) -> Router:
     """Собрать роутер участников события."""
     router = Router(name="sea_delivery")
@@ -79,6 +88,8 @@ def make_sea_router(store: SeaStore) -> Router:
 
         if event.status is EventStatus.ROUND_ACTIVE:
             result = await service.start_or_resume_session(store, chat_id, user.id)
+            if result.session is not None:
+                _set_owner(result.session, user)
             await _send_session_menu(message, result.session, event, result.outcome)
             return
 
@@ -133,26 +144,11 @@ def make_sea_router(store: SeaStore) -> Router:
         session.menu_message_id = sent.message_id
         await store.save_session(session)
 
-    async def _post_menu(
-        message: Message, note: str, session: Session, *, final: bool = False
-    ) -> None:
-        """Отправить новое фото-меню с состоянием и обновить указатель меню."""
-        event = await service.get_event_or_default(store, session.chat_id)
-        markup = None if final else ui.session_keyboard(session, event)
-        sent = await message.answer_photo(
-            _board_photo(session),
-            caption=_caption(note, session, event),
-            reply_markup=markup,
-            parse_mode="HTML",
-        )
-        session.menu_chat_id = sent.chat.id
-        session.menu_message_id = sent.message_id
-        await store.save_session(session)
-
     async def _sail_via_message(
         message: Message, bot: Bot, session: Session, user: User
     ) -> None:
         """Один ход «плыть» по сообщению с хештегом (текстовое управление)."""
+        _set_owner(session, user)
         rng = random.Random()
         result = engine.sail_forward(session, rng)
         if result.outcome is SailOutcome.BLOCKED:
@@ -162,13 +158,23 @@ def make_sea_router(store: SeaStore) -> Router:
         event = await service.get_event_or_default(store, session.chat_id)
 
         async def _update(note: str, *, final: bool = False) -> None:
-            # Один ход правит существующую карточку-карту на месте (без спама
-            # новыми сообщениями). Если указателя меню нет — шлём новую карточку.
-            if session.menu_chat_id is not None and session.menu_message_id is not None:
-                await store.save_session(session)
-                await _edit_menu(bot, store, session, note, event, final=final)
-            else:
-                await _post_menu(message, note, session, final=final)
+            # Карточка «следует» за игроком: шлём свежую карту вниз (рядом с его
+            # последним сообщением) и удаляем прежнюю, чтобы не искать свой
+            # корабль вверху чата. Карточка всегда одна и помечена владельцем.
+            old_chat, old_msg = session.menu_chat_id, session.menu_message_id
+            markup = None if final else ui.session_keyboard(session, event)
+            sent = await message.answer_photo(
+                _board_photo(session),
+                caption=_caption(note, session, event),
+                reply_markup=markup,
+                parse_mode="HTML",
+            )
+            session.menu_chat_id = sent.chat.id
+            session.menu_message_id = sent.message_id
+            await store.save_session(session)
+            if old_chat is not None and old_msg is not None:
+                with suppress(TelegramBadRequest):
+                    await bot.delete_message(old_chat, old_msg)
 
         note = _sail_note(result)
         if result.outcome is SailOutcome.CHALLENGE and result.challenge_kind is not None:
@@ -585,11 +591,21 @@ async def _edit_menu(
 _CAPTION_LIMIT = 1024
 
 
+def _owner_line(session: Session) -> str:
+    """Строка-пометка владельца карточки: кликабельное имя + @username."""
+    if not session.owner_name and not session.owner_username:
+        return ""
+    name = html.escape(session.owner_name or session.owner_username or "Капитан")
+    mention = f'<a href="tg://user?id={session.user_id}">{name}</a>'
+    if session.owner_username:
+        mention += f" (@{html.escape(session.owner_username)})"
+    return f"👤 <b>Капитан:</b> {mention}"
+
+
 def _compose(note: str, session: Session, event: EventState) -> str:
     body = ui.render_session(session, event)
-    if note:
-        return f"{note}\n\n{body}"
-    return body
+    parts = [part for part in (_owner_line(session), note, body) if part]
+    return "\n\n".join(parts)
 
 
 def _caption(note: str, session: Session, event: EventState) -> str:
