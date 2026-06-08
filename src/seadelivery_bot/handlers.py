@@ -159,10 +159,21 @@ def make_sea_router(store: SeaStore) -> Router:
             await message.answer("Сейчас плыть нельзя.", parse_mode="HTML")
             return
 
+        event = await service.get_event_or_default(store, session.chat_id)
+
+        async def _update(note: str, *, final: bool = False) -> None:
+            # Один ход правит существующую карточку-карту на месте (без спама
+            # новыми сообщениями). Если указателя меню нет — шлём новую карточку.
+            if session.menu_chat_id is not None and session.menu_message_id is not None:
+                await store.save_session(session)
+                await _edit_menu(bot, store, session, note, event, final=final)
+            else:
+                await _post_menu(message, note, session, final=final)
+
         note = _sail_note(result)
         if result.outcome is SailOutcome.CHALLENGE and result.challenge_kind is not None:
             note = f"{note}\n\n{ui.challenge_intro(result.challenge_kind)}"
-            await _post_menu(message, note, session)
+            await _update(note)
             if result.challenge_kind is ChallengeKind.FISHING:
                 _schedule_fishing(bot, store, session.chat_id, session.user_id)
             return
@@ -170,9 +181,9 @@ def make_sea_router(store: SeaStore) -> Router:
         if engine.is_exhausted(session):
             username, full_name = _user_fields(user)
             await service.finalize_session(store, session, username, full_name)
-            await _post_menu(message, note + "\n\n🏁 Сессия завершена.", session, final=True)
+            await _update(note + "\n\n" + _finish_banner(session), final=True)
             return
-        await _post_menu(message, note, session)
+        await _update(note)
 
     # ---------- точки входа: команда и хештег ----------
 
@@ -314,7 +325,7 @@ def make_sea_router(store: SeaStore) -> Router:
                 await query.message.edit_media(
                     InputMediaPhoto(
                         media=_board_photo(session),
-                        caption=_caption(note + "\n\n🏁 Сессия завершена.", session, event),
+                        caption=_caption(note + "\n\n" + _finish_banner(session), session, event),
                         parse_mode="HTML",
                     ),
                     reply_markup=None,
@@ -361,8 +372,7 @@ def make_sea_router(store: SeaStore) -> Router:
                 query,
                 session,
                 f"📦 Берём заказ: везём <b>{order.needed_item}</b> для <b>{order.merchant}</b>.\n"
-                f"🧭 Плывём на остров <b>{order.source_island}</b>.\n"
-                f"✍️ Пишите сообщения с <b>{content.HASHTAG}</b> — каждое = шаг вперёд.",
+                f"🧭 Плывём на остров <b>{order.source_island}</b>.",
             )
             return
         alerts = {
@@ -519,7 +529,7 @@ def _schedule_fishing(bot: Bot, store: SeaStore, chat_id: int, user_id: int) -> 
                 bot,
                 store,
                 session2,
-                note + "\n\n🏁 Сессия завершена.",
+                note + "\n\n" + _finish_banner(session2),
                 event2,
                 final=True,
             )
@@ -595,6 +605,17 @@ def _caption(note: str, session: Session, event: EventState) -> str:
 
 def _board_photo(session: Session) -> BufferedInputFile:
     return BufferedInputFile(pixmap.board_png(session), filename="map.png")
+
+
+def _finish_banner(session: Session) -> str:
+    """Итог сессии: победа только при сдаче всех заказов, иначе — провал."""
+    if engine.session_succeeded(session):
+        return "🏁 <b>Сессия завершена. Все заказы доставлены — успех!</b>"
+    return (
+        f"❌ <b>Провал!</b> Сдано заказов: "
+        f"<b>{session.orders_completed} из {content.REQUESTS_PER_ROUND}</b> — "
+        "не успели доставить всё за отведённые ходы."
+    )
 
 
 def _sail_note(result: engine.SailResult) -> str:

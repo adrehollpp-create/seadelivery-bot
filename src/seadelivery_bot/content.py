@@ -90,7 +90,7 @@ MAX_PLAYERS_PER_ROUND: int = 12
 RECRUITMENT_SECONDS: int = 60 * 60  # набор длится час
 REQUESTS_PER_ROUND: int = 2  # сколько торговцев нуждаются в помощи за раунд
 
-MOVES_PER_SESSION: int = 17
+MOVES_PER_SESSION: int = 19
 MAX_ISLAND_TRAVELS: int = 7  # без учёта бонусов
 MAX_CHALLENGES_PER_SESSION: int = 3
 

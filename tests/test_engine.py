@@ -313,3 +313,13 @@ def test_is_exhausted_and_finish_delta() -> None:
     assert delta.moves_used == 17
     assert delta.island_travels == 3
     assert delta.score == 245
+
+
+def test_session_succeeded_requires_all_orders() -> None:
+    session = _route_session([CellType.EMPTY, CellType.EMPTY])
+    # Сдан не весь набор заказов — это провал.
+    session.orders_completed = content.REQUESTS_PER_ROUND - 1
+    assert engine.session_succeeded(session) is False
+    # Сданы все заказы — успех.
+    session.orders_completed = content.REQUESTS_PER_ROUND
+    assert engine.session_succeeded(session) is True

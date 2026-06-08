@@ -369,6 +369,11 @@ def is_exhausted(session: Session) -> bool:
     return session.moves_left <= 0 and session.active_challenge is None
 
 
+def session_succeeded(session: Session) -> bool:
+    """Сессия успешна, только если игрок сдал ВСЕ заказы раунда."""
+    return session.orders_completed >= content.REQUESTS_PER_ROUND
+
+
 def finish_session(session: Session) -> StatsDelta:
     """Завершить сессию и вернуть приращение статистики для агрегатов."""
     session.status = SessionStatus.FINISHED
