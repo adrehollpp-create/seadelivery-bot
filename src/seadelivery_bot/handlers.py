@@ -18,9 +18,16 @@ from contextlib import suppress
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message, User
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    Message,
+    User,
+)
 
-from . import content, engine, service, ui
+from . import content, engine, pixmap, service, ui
 from .engine import (
     FishingOutcome,
     MinesOutcome,
@@ -116,8 +123,9 @@ def make_sea_router(store: SeaStore) -> Router:
             if outcome is StartSessionOutcome.NEW
             else ""
         )
-        sent = await message.answer(
-            _compose(note, session, event),
+        sent = await message.answer_photo(
+            _board_photo(session),
+            caption=_caption(note, session, event),
             reply_markup=ui.session_keyboard(session, event),
             parse_mode="HTML",
         )
@@ -125,12 +133,16 @@ def make_sea_router(store: SeaStore) -> Router:
         session.menu_message_id = sent.message_id
         await store.save_session(session)
 
-    async def _post_menu(message: Message, note: str, session: Session) -> None:
-        """Отправить новое сообщение с состоянием и обновить указатель меню."""
+    async def _post_menu(
+        message: Message, note: str, session: Session, *, final: bool = False
+    ) -> None:
+        """Отправить новое фото-меню с состоянием и обновить указатель меню."""
         event = await service.get_event_or_default(store, session.chat_id)
-        sent = await message.answer(
-            _compose(note, session, event),
-            reply_markup=ui.session_keyboard(session, event),
+        markup = None if final else ui.session_keyboard(session, event)
+        sent = await message.answer_photo(
+            _board_photo(session),
+            caption=_caption(note, session, event),
+            reply_markup=markup,
             parse_mode="HTML",
         )
         session.menu_chat_id = sent.chat.id
@@ -158,11 +170,7 @@ def make_sea_router(store: SeaStore) -> Router:
         if engine.is_exhausted(session):
             username, full_name = _user_fields(user)
             await service.finalize_session(store, session, username, full_name)
-            event = await service.get_event_or_default(store, session.chat_id)
-            await message.answer(
-                _compose(note + "\n\n🏁 Сессия завершена.", session, event),
-                parse_mode="HTML",
-            )
+            await _post_menu(message, note + "\n\n🏁 Сессия завершена.", session, final=True)
             return
         await _post_menu(message, note, session)
 
@@ -278,10 +286,13 @@ def make_sea_router(store: SeaStore) -> Router:
         await store.save_session(session)
         if isinstance(query.message, Message):
             with suppress(TelegramBadRequest):
-                await query.message.edit_text(
-                    _compose(note, session, event),
+                await query.message.edit_media(
+                    InputMediaPhoto(
+                        media=_board_photo(session),
+                        caption=_caption(note, session, event),
+                        parse_mode="HTML",
+                    ),
                     reply_markup=ui.session_keyboard(session, event),
-                    parse_mode="HTML",
                 )
 
     async def _finish_and_render(query: CallbackQuery, session: Session, note: str) -> None:
@@ -290,10 +301,13 @@ def make_sea_router(store: SeaStore) -> Router:
         event = await service.get_event_or_default(store, session.chat_id)
         if isinstance(query.message, Message):
             with suppress(TelegramBadRequest):
-                await query.message.edit_text(
-                    _compose(note + "\n\n🏁 Сессия завершена.", session, event),
+                await query.message.edit_media(
+                    InputMediaPhoto(
+                        media=_board_photo(session),
+                        caption=_caption(note + "\n\n🏁 Сессия завершена.", session, event),
+                        parse_mode="HTML",
+                    ),
                     reply_markup=None,
-                    parse_mode="HTML",
                 )
 
     @router.callback_query(F.data.regexp(rf"^{ui.CB_PREFIX}:refresh:\d+$"))
@@ -479,7 +493,7 @@ def _schedule_fishing(bot: Bot, store: SeaStore, chat_id: int, user_id: int) -> 
             return
         await store.save_session(session)
         event = await service.get_event_or_default(store, chat_id)
-        await _edit_menu(bot, session, _compose("🎣 Поклёвка! ЖМИ!", session, event), event)
+        await _edit_menu(bot, session, "🎣 Поклёвка! ЖМИ!", event)
 
         await asyncio.sleep(content.FISHING_REACTION_SECONDS + 0.5)
         session2 = await store.get_session(chat_id, user_id)
@@ -494,19 +508,19 @@ def _schedule_fishing(bot: Bot, store: SeaStore, chat_id: int, user_id: int) -> 
             await _edit_menu(
                 bot,
                 session2,
-                _compose(note + "\n\n🏁 Сессия завершена.", session2, event2),
+                note + "\n\n🏁 Сессия завершена.",
                 event2,
                 final=True,
             )
             return
         await store.save_session(session2)
-        await _edit_menu(bot, session2, _compose(note, session2, event2), event2)
+        await _edit_menu(bot, session2, note, event2)
 
     asyncio.create_task(_runner())  # noqa: RUF006  (fire-and-forget игровой таймер)
 
 
 async def _edit_menu(
-    bot: Bot, session: Session, text: str, event: EventState, *, final: bool = False
+    bot: Bot, session: Session, note: str, event: EventState, *, final: bool = False
 ) -> None:
     if session.menu_chat_id is None or session.menu_message_id is None:
         return
@@ -514,16 +528,22 @@ async def _edit_menu(
     if not final:
         markup = ui.session_keyboard(session, event)
     with suppress(TelegramBadRequest):
-        await bot.edit_message_text(
-            text=text,
+        await bot.edit_message_media(
+            media=InputMediaPhoto(
+                media=_board_photo(session),
+                caption=_caption(note, session, event),
+                parse_mode="HTML",
+            ),
             chat_id=session.menu_chat_id,
             message_id=session.menu_message_id,
             reply_markup=markup,
-            parse_mode="HTML",
         )
 
 
 # ---------- вспомогательные функции рендера/парсинга ----------
+
+
+_CAPTION_LIMIT = 1024
 
 
 def _compose(note: str, session: Session, event: EventState) -> str:
@@ -531,6 +551,21 @@ def _compose(note: str, session: Session, event: EventState) -> str:
     if note:
         return f"{note}\n\n{body}"
     return body
+
+
+def _caption(note: str, session: Session, event: EventState) -> str:
+    """Подпись к фото-карте. Обрезаем по целым строкам, чтобы не порвать HTML."""
+    text = _compose(note, session, event)
+    if len(text) <= _CAPTION_LIMIT:
+        return text
+    lines = text.split("\n")
+    while lines and len("\n".join(lines)) > _CAPTION_LIMIT:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _board_photo(session: Session) -> BufferedInputFile:
+    return BufferedInputFile(pixmap.board_png(session), filename="map.png")
 
 
 def _plural_cells(n: int) -> str:

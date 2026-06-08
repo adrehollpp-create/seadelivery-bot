@@ -41,40 +41,20 @@ def format_requests(event: EventState) -> str:
     return "\n".join(lines)
 
 
-_MAP_LEGEND = "🟢 старт · ▫️ позади · 🚤 ваш корабль · 🌫 впереди · 🏁 место доставки"
-
-
-def _board_map(session: Session) -> str:
-    """Наглядная эмодзи-карта маршрута: где игрок сейчас и сколько до цели.
-
-    Клетки впереди скрыты «туманом» (🌫) — что на них (сокровище 💎 или
-    испытание ⚔️), игрок узнаёт, доплыв до клетки.
-    """
+def _progress_line(session: Session) -> str:
+    """Короткая подпись к картинке-карте: где игрок и сколько ещё плыть."""
     board = session.board
     if not session.on_route or not board:
         return "—"
     last = len(board) - 1
-    cells: list[str] = ["🟢"]
-    for idx in range(len(board)):
-        if idx == session.position:
-            cells.append("🚤")
-        elif idx < session.position:
-            cells.append("▫️")
-        elif idx == last:
-            cells.append("🏁")
-        else:
-            cells.append("🌫")
-    strip = " ".join(cells)
     pos_no = session.position + 1
     to_go = max(0, last - session.position)
     if to_go > 0:
-        progress = (
-            f"📍 Вы на клетке <b>{pos_no}</b> из <b>{len(board)}</b> "
+        return (
+            f"📍 Клетка <b>{pos_no}</b> из <b>{len(board)}</b> "
             f"· плыть ещё <b>{to_go}</b> ▶️"
         )
-    else:
-        progress = f"📍 Клетка <b>{pos_no}</b> из <b>{len(board)}</b> · 🏁 вы на месте!"
-    return f"{strip}\n{progress}\n<i>{_MAP_LEGEND}</i>"
+    return f"📍 Клетка <b>{pos_no}</b> из <b>{len(board)}</b> · 🏁 вы на месте!"
 
 
 # ---------- лобби / набор ----------
@@ -121,8 +101,8 @@ def render_session(session: Session, event: EventState) -> str:
             f"📦 Везёте <b>{escape(order.needed_item)}</b> для <b>{escape(order.merchant)}</b>"
         )
         lines.append("")
-        lines.append("🗺 <b>Сколько плыть до места доставки:</b>")
-        lines.append(_board_map(session))
+        lines.append("🗺 <b>Карта маршрута — на картинке выше.</b>")
+        lines.append(_progress_line(session))
         lines.append("")
         lines.append(
             f"✍️ <b>Чтобы плыть дальше — напишите сообщение с {content.HASHTAG}.</b>\n"
