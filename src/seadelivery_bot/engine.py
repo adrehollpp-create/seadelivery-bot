@@ -81,11 +81,13 @@ def generate_board(rng: random.Random, challenges_budget: int) -> list[CellType]
 
     challenges_left = max(0, challenges_budget)
     for idx in middle:
-        roll = rng.random()
-        if roll < 0.30 and challenges_left > 0:
+        # Испытание и сокровище разыгрываются независимо, чтобы вероятность
+        # сокровища была фиксированной (CHANCE_TREASURE) и не «разбухала» после
+        # исчерпания бюджета испытаний.
+        if challenges_left > 0 and rng.random() < content.CHANCE_CHALLENGE:
             board[idx] = CellType.CHALLENGE
             challenges_left -= 1
-        elif roll < 0.55:
+        elif rng.random() < content.CHANCE_TREASURE:
             board[idx] = CellType.TREASURE
         else:
             board[idx] = CellType.EMPTY

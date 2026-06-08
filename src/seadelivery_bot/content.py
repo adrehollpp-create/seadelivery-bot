@@ -97,6 +97,11 @@ MAX_CHALLENGES_PER_SESSION: int = 3
 BOARD_MIN_LEN: int = 6
 BOARD_MAX_LEN: int = 9
 
+# Вероятности содержимого клетки маршрута. Испытание разыгрывается первым
+# (пока есть бюджет испытаний), затем независимо — сокровище.
+CHANCE_CHALLENGE: float = 0.30
+CHANCE_TREASURE: float = 0.40
+
 # Награды/бонусы (в очках).
 REWARD_PER_ORDER: int = 100
 TREASURE_BONUS: int = 30

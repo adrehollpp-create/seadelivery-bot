@@ -66,6 +66,19 @@ def test_generate_board_zero_budget_has_no_challenges() -> None:
         assert engine.board_challenge_count(board) == 0
 
 
+def test_generate_board_treasure_rate_near_40_percent() -> None:
+    # Без бюджета испытаний каждая средняя клетка — сокровище с шансом 40%.
+    rng = random.Random(2024)
+    middle = treasures = 0
+    for _ in range(4000):
+        board = engine.generate_board(rng, challenges_budget=0)
+        middle += len(board) - 2
+        treasures += sum(1 for c in board[1:-1] if c is CellType.TREASURE)
+    rate = treasures / middle
+    assert content.CHANCE_TREASURE == 0.40
+    assert 0.36 <= rate <= 0.44
+
+
 # ---------- старт маршрута ----------
 
 
