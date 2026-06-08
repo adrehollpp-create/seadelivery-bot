@@ -162,6 +162,10 @@ async def start_round(
     event.status = EventStatus.ROUND_ACTIVE
     event.requests = engine.pick_round_requests(rng)
     event.recruit_deadline = None
+    # Новый раунд = новая игра для всех: убираем старые сессии, чтобы никого
+    # не блокировало «вы уже отыграли». Накопленная статистика хранится отдельно
+    # (bump_stats) и не сбрасывается.
+    await store.clear_sessions(chat_id)
     await store.save_event(event)
     return RoundResult(RoundOutcome.OK, event)
 

@@ -597,24 +597,11 @@ def _board_photo(session: Session) -> BufferedInputFile:
     return BufferedInputFile(pixmap.board_png(session), filename="map.png")
 
 
-def _plural_cells(n: int) -> str:
-    """Согласование слова «клетка» с числом (1 клетку, 2 клетки, 5 клеток)."""
-    if n % 10 == 1 and n % 100 != 11:
-        return "клетку"
-    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
-        return "клетки"
-    return "клеток"
-
-
 def _sail_note(result: engine.SailResult) -> str:
     if result.outcome is SailOutcome.EMPTY:
         return "🌊 Пустая вода — плывём дальше."
     if result.outcome is SailOutcome.TREASURE:
-        steps = result.treasure_steps
-        return (
-            f"💰 Сокровище! +{result.treasure_gain} очков, "
-            f"корабль рванул вперёд на {steps} {_plural_cells(steps)}."
-        )
+        return f"💰 Сокровище! +{result.treasure_gain} очков."
     if result.outcome is SailOutcome.DELIVERED:
         return f"🎁 Заказ доставлен для {result.delivered_merchant}! +{result.reward} очков."
     if result.outcome is SailOutcome.CHALLENGE:

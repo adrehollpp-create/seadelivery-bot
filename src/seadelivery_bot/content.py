@@ -101,7 +101,6 @@ BOARD_MAX_LEN: int = 9
 REWARD_PER_ORDER: int = 100
 TREASURE_BONUS: int = 30
 CHALLENGE_WIN_BONUS: int = 15
-TREASURE_ADVANCE: int = 2  # сокровище продвигает на 2 клетки вперёд
 
 # Параметры мини-игр.
 MINES_TOTAL_CELLS: int = 6

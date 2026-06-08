@@ -155,7 +155,6 @@ class SailOutcome(StrEnum):
 class SailResult:
     outcome: SailOutcome
     treasure_gain: int = 0
-    treasure_steps: int = 0  # на сколько клеток сдвинуло сокровище (суммарно по цепочке)
     delivered_merchant: str | None = None
     reward: int = 0
     challenge_kind: ChallengeKind | None = None
@@ -198,22 +197,11 @@ def _resolve_cell(session: Session, rng: random.Random) -> SailResult:
 
     cell = session.board[session.position]
     if cell is CellType.TREASURE:
+        # Сокровище — разовый бонус очков на этой клетке. Никаких «рывков» вперёд:
+        # одно сообщение = ровно один шаг, чтобы движение было предсказуемым.
         session.score += content.TREASURE_BONUS
         session.bonuses.append(f"Сокровище +{content.TREASURE_BONUS}")
-        last = len(session.board) - 1
-        advance = min(content.TREASURE_ADVANCE, last - session.position)
-        session.position += advance
-        # Сокровище может вывести на конец маршрута или на новую клетку — разрешаем её.
-        follow = _resolve_cell(session, rng)
-        if follow.outcome is SailOutcome.DELIVERED:
-            return follow
-        # Складываем эффект цепочки сокровищ, чтобы в сообщении были честные числа.
-        return SailResult(
-            SailOutcome.TREASURE,
-            treasure_gain=content.TREASURE_BONUS + follow.treasure_gain,
-            treasure_steps=advance + follow.treasure_steps,
-            challenge_kind=follow.challenge_kind,
-        )
+        return SailResult(SailOutcome.TREASURE, treasure_gain=content.TREASURE_BONUS)
     if cell is CellType.CHALLENGE:
         session.active_challenge = _make_challenge(rng)
         session.challenges_remaining = max(0, session.challenges_remaining - 1)

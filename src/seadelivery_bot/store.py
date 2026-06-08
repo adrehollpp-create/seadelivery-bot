@@ -232,6 +232,9 @@ class SeaStore(ABC):
     @abstractmethod
     async def delete_session(self, chat_id: int, user_id: int) -> None: ...
 
+    @abstractmethod
+    async def clear_sessions(self, chat_id: int) -> None: ...
+
     # ----- статистика -----
     @abstractmethod
     async def bump_stats(
@@ -432,6 +435,13 @@ class SqliteSeaStore(SeaStore):
         await self._c.execute(
             "DELETE FROM sea_sessions WHERE chat_id = ? AND user_id = ?",
             (chat_id, user_id),
+        )
+        await self._c.commit()
+
+    async def clear_sessions(self, chat_id: int) -> None:
+        await self._c.execute(
+            "DELETE FROM sea_sessions WHERE chat_id = ?",
+            (chat_id,),
         )
         await self._c.commit()
 
@@ -705,6 +715,12 @@ class PostgresSeaStore(SeaStore):
             "DELETE FROM sea_sessions WHERE chat_id = $1 AND user_id = $2",
             chat_id,
             user_id,
+        )
+
+    async def clear_sessions(self, chat_id: int) -> None:
+        await self._p.execute(
+            "DELETE FROM sea_sessions WHERE chat_id = $1",
+            chat_id,
         )
 
     async def bump_stats(

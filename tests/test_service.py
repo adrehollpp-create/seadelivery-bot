@@ -166,6 +166,33 @@ async def test_session_lifecycle(store: SeaStore) -> None:
     assert replayed.outcome is service.StartSessionOutcome.ALREADY_PLAYED
 
 
+async def test_new_round_lets_player_play_again_and_keeps_stats(store: SeaStore) -> None:
+    # Раунд 1: игрок отыгрывает и доигрывает свою сессию.
+    await service.open_recruitment(store, 1, now=0.0)
+    await service.join_round(store, 1, 10, "alice", "Alice", now=1.0)
+    await service.start_round(store, 1, random.Random(0))
+    first = await service.start_or_resume_session(store, 1, 10)
+    assert first.session is not None
+    first.session.orders_completed = 1
+    first.session.score = 100
+    await service.finalize_session(store, first.session, "alice", "Alice")
+    assert (await service.start_or_resume_session(store, 1, 10)).outcome is (
+        service.StartSessionOutcome.ALREADY_PLAYED
+    )
+    await service.end_round(store, 1)
+
+    # Новый раунд (новый набор + запуск) = новая игра: блока «уже отыграл» нет.
+    await service.open_recruitment(store, 1, now=100.0)
+    await service.join_round(store, 1, 10, "alice", "Alice", now=101.0)
+    await service.start_round(store, 1, random.Random(0))
+    again = await service.start_or_resume_session(store, 1, 10)
+    assert again.outcome is service.StartSessionOutcome.NEW
+
+    # Накопленная статистика прошлого раунда не сбрасывается.
+    stats = await store.player_stats(1)
+    assert stats and stats[0].score == 100 and stats[0].games_played == 1
+
+
 async def test_session_blocked_without_active_round(store: SeaStore) -> None:
     result = await service.start_or_resume_session(store, 1, 10)
     assert result.outcome is service.StartSessionOutcome.NO_ACTIVE_ROUND
