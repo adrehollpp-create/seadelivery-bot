@@ -51,6 +51,9 @@ async def open_recruitment(store: SeaStore, chat_id: int, now: float | None = No
     event.recruit_round = event.current_round + 1
     event.recruit_deadline = now + content.RECRUITMENT_SECONDS
     event.requests = []
+    # Каждый набор начинается с чистого списка: убираем регистрации этого раунда,
+    # если они остались от прошлого набора/события (иначе игроки «уже записаны»).
+    await store.clear_registrations(chat_id, event.recruit_round)
     await store.save_event(event)
     return OpenResult(OpenOutcome.OK, event)
 

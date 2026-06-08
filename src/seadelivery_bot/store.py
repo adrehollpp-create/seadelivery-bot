@@ -215,6 +215,9 @@ class SeaStore(ABC):
     async def remove_registration(self, chat_id: int, round_no: int, user_id: int) -> bool: ...
 
     @abstractmethod
+    async def clear_registrations(self, chat_id: int, round_no: int) -> None: ...
+
+    @abstractmethod
     async def list_registrations(
         self, chat_id: int, round_no: int
     ) -> list[tuple[int, str | None, str | None]]: ...
@@ -373,6 +376,13 @@ class SqliteSeaStore(SeaStore):
         )
         await self._c.commit()
         return cur.rowcount > 0
+
+    async def clear_registrations(self, chat_id: int, round_no: int) -> None:
+        await self._c.execute(
+            "DELETE FROM sea_registrations WHERE chat_id = ? AND round_no = ?",
+            (chat_id, round_no),
+        )
+        await self._c.commit()
 
     async def list_registrations(
         self, chat_id: int, round_no: int
@@ -641,6 +651,13 @@ class PostgresSeaStore(SeaStore):
             user_id,
         )
         return _affected_rows(status) > 0
+
+    async def clear_registrations(self, chat_id: int, round_no: int) -> None:
+        await self._p.execute(
+            "DELETE FROM sea_registrations WHERE chat_id = $1 AND round_no = $2",
+            chat_id,
+            round_no,
+        )
 
     async def list_registrations(
         self, chat_id: int, round_no: int

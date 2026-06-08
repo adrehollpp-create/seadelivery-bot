@@ -31,6 +31,18 @@ async def test_open_recruitment_sets_next_round(store: SeaStore) -> None:
     assert result.event.recruit_deadline == 1000.0 + content.RECRUITMENT_SECONDS
 
 
+async def test_reopening_recruitment_clears_old_registrations(store: SeaStore) -> None:
+    await service.open_recruitment(store, 1, now=0.0)
+    await service.join_round(store, 1, 10, "alice", "Alice", now=1.0)
+    await service.join_round(store, 1, 11, "bob", "Bob", now=1.0)
+    assert await store.count_registrations(1, 1) == 2
+
+    # Повторно открываем набор на тот же раунд — список должен обнулиться.
+    await service.open_recruitment(store, 1, now=10.0)
+    assert await store.count_registrations(1, 1) == 0
+    assert not await store.is_registered(1, 1, 10)
+
+
 async def test_join_flow_dup_full_and_closed(store: SeaStore) -> None:
     await service.open_recruitment(store, 1, now=0.0)
 

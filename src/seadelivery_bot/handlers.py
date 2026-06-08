@@ -285,15 +285,25 @@ def make_sea_router(store: SeaStore) -> Router:
             session.menu_message_id = query.message.message_id
         await store.save_session(session)
         if isinstance(query.message, Message):
-            with suppress(TelegramBadRequest):
-                await query.message.edit_media(
-                    InputMediaPhoto(
-                        media=_board_photo(session),
-                        caption=_caption(note, session, event),
-                        parse_mode="HTML",
-                    ),
-                    reply_markup=ui.session_keyboard(session, event),
+            media = InputMediaPhoto(
+                media=_board_photo(session),
+                caption=_caption(note, session, event),
+                parse_mode="HTML",
+            )
+            markup = ui.session_keyboard(session, event)
+            try:
+                await query.message.edit_media(media, reply_markup=markup)
+            except TelegramBadRequest:
+                # Старое меню могло быть текстовым (до перехода на фото) — шлём новое фото.
+                sent = await query.message.answer_photo(
+                    _board_photo(session),
+                    caption=_caption(note, session, event),
+                    reply_markup=markup,
+                    parse_mode="HTML",
                 )
+                session.menu_chat_id = sent.chat.id
+                session.menu_message_id = sent.message_id
+                await store.save_session(session)
 
     async def _finish_and_render(query: CallbackQuery, session: Session, note: str) -> None:
         username, full_name = _user_fields(query.from_user)
@@ -493,7 +503,7 @@ def _schedule_fishing(bot: Bot, store: SeaStore, chat_id: int, user_id: int) -> 
             return
         await store.save_session(session)
         event = await service.get_event_or_default(store, chat_id)
-        await _edit_menu(bot, session, "🎣 Поклёвка! ЖМИ!", event)
+        await _edit_menu(bot, store, session, "🎣 Поклёвка! ЖМИ!", event)
 
         await asyncio.sleep(content.FISHING_REACTION_SECONDS + 0.5)
         session2 = await store.get_session(chat_id, user_id)
@@ -507,6 +517,7 @@ def _schedule_fishing(bot: Bot, store: SeaStore, chat_id: int, user_id: int) -> 
             await service.finalize_session(store, session2, None, None)
             await _edit_menu(
                 bot,
+                store,
                 session2,
                 note + "\n\n🏁 Сессия завершена.",
                 event2,
@@ -514,20 +525,26 @@ def _schedule_fishing(bot: Bot, store: SeaStore, chat_id: int, user_id: int) -> 
             )
             return
         await store.save_session(session2)
-        await _edit_menu(bot, session2, note, event2)
+        await _edit_menu(bot, store, session2, note, event2)
 
     asyncio.create_task(_runner())  # noqa: RUF006  (fire-and-forget игровой таймер)
 
 
 async def _edit_menu(
-    bot: Bot, session: Session, note: str, event: EventState, *, final: bool = False
+    bot: Bot,
+    store: SeaStore,
+    session: Session,
+    note: str,
+    event: EventState,
+    *,
+    final: bool = False,
 ) -> None:
     if session.menu_chat_id is None or session.menu_message_id is None:
         return
     markup: InlineKeyboardMarkup | None = None
     if not final:
         markup = ui.session_keyboard(session, event)
-    with suppress(TelegramBadRequest):
+    try:
         await bot.edit_message_media(
             media=InputMediaPhoto(
                 media=_board_photo(session),
@@ -538,6 +555,18 @@ async def _edit_menu(
             message_id=session.menu_message_id,
             reply_markup=markup,
         )
+    except TelegramBadRequest:
+        # Старое меню могло быть текстовым — отправляем новое фото-сообщение.
+        with suppress(TelegramBadRequest):
+            sent = await bot.send_photo(
+                chat_id=session.menu_chat_id,
+                photo=_board_photo(session),
+                caption=_caption(note, session, event),
+                reply_markup=markup,
+                parse_mode="HTML",
+            )
+            session.menu_message_id = sent.message_id
+            await store.save_session(session)
 
 
 # ---------- вспомогательные функции рендера/парсинга ----------
